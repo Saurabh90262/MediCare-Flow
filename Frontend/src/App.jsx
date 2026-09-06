@@ -144,6 +144,84 @@ async function api(path, options = {}) {
   return data;
 }
 
+/* ============================================================================
+ * REALTIME - Socket.IO, with automatic fallback to polling
+ *
+ * The client library is fetched from the backend's own /socket.io/socket.io.js,
+ * which Socket.IO serves automatically. That means THE FRONTEND NEEDS NO NEW
+ * NPM PACKAGE - only the backend runs "npm install socket.io". It also can
+ * never version-drift from the server, and it works with no internet access.
+ *
+ * If the script or the connection fails, loadSocketIo resolves null, every
+ * screen keeps its polling timer and nothing breaks.
+ * ========================================================================== */
+
+const API_ORIGIN = API.replace(/\/api\/?$/, '');
+
+let socketScript = null;
+
+function loadSocketIo() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return Promise.resolve(null);
+  if (window.io) return Promise.resolve(window.io);
+  if (socketScript) return socketScript;
+  socketScript = new Promise((resolve) => {
+    const tag = document.createElement('script');
+    tag.src = API_ORIGIN + '/socket.io/socket.io.js';
+    tag.async = true;
+    tag.onload = () => resolve(window.io || null);
+    tag.onerror = () => resolve(null);
+    document.head.appendChild(tag);
+  });
+  return socketScript;
+}
+
+/* Subscribes to one clinic/day queue board.
+   Returns true while the socket is connected, so callers can relax their
+   polling interval into a mere safety net. onUpdate is kept in a ref so a new
+   render never tears down and rebuilds the connection. */
+function useQueueSocket(clinicId, date, onUpdate) {
+  const [connected, setConnected] = useState(false);
+  const handler = useRef(onUpdate);
+  handler.current = onUpdate;
+
+  useEffect(() => {
+    if (!clinicId) return undefined;
+    let socket = null;
+    let cancelled = false;
+
+    loadSocketIo().then((factory) => {
+      if (cancelled || !factory) return;
+      socket = factory(API_ORIGIN, {
+        transports: ['websocket', 'polling'],
+        reconnectionDelay: 1200,
+        reconnectionDelayMax: 6000,
+        timeout: 8000,
+      });
+      socket.on('connect', () => {
+        setConnected(true);
+        socket.emit('queue:join', { clinicId, date: date || '' });
+      });
+      socket.on('disconnect', () => setConnected(false));
+      socket.on('connect_error', () => setConnected(false));
+      socket.on('queue:update', (payload) => {
+        if (handler.current) handler.current(payload);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      setConnected(false);
+      if (socket) {
+        socket.off('queue:update');
+        socket.emit('queue:leave');
+        socket.disconnect();
+      }
+    };
+  }, [clinicId, date]);
+
+  return connected;
+}
+
 /* --------------------------------------------------------------- helpers -- */
 
 const todayISO = () => {
@@ -1169,15 +1247,170 @@ const CSS_QUEUE = `
 }
 `;
 
+/* ============================================================================
+ * ADAPTIVE LAYER
+ *
+ * Concatenated LAST so it always wins the cascade and can never be disturbed
+ * by, or disturb, the rules above it. Ladder of breakpoints:
+ *   1600+  ultra-wide monitors      1280   laptops
+ *   1080   small laptop / tablet    900    tablet portrait
+ *   768    large phone / landscape  600    phone
+ *   400    small phone              short/touch/print special cases
+ * ========================================================================== */
+
+const CSS_RESP = `
+/* long emails, addresses and booking ids must wrap, never widen the page */
+.kv dd,.tk-mini b,.tk-mini small,.who b,.contact span,.lq-cap,.adm-clinic{overflow-wrap:anywhere; word-break:break-word}
+img,svg,video,canvas{max-width:100%}
+input,select,textarea,button{max-width:100%}
+/* overflow:clip (not hidden) kills sideways scroll WITHOUT breaking the
+   sticky sidebar and sticky admin topbar, which overflow:hidden would. */
+@supports (overflow:clip){
+  html,body{overflow-x:clip}
+}
+/* real viewport height on mobile, where 100vh hides behind the URL bar */
+@supports (height:100dvh){
+  .auth,.adm{min-height:100dvh}
+  .adm-side{height:100dvh}
+}
+
+@media (min-width:1600px){
+  .container{max-width:1400px}
+  .container-sm{max-width:960px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+}
+
+@media (max-width:1280px){
+  .adm{grid-template-columns:232px 1fr}
+  .adm-body{padding:20px}
+  .ft-grid{gap:24px}
+}
+
+@media (max-width:1080px){
+  .lq-hero-in{gap:20px}
+  .tk-grid{gap:16px}
+}
+
+@media (max-width:900px){
+  .container,.container-sm{padding:0 18px}
+  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:13px}
+  .an-grid{grid-template-columns:repeat(auto-fit,minmax(178px,1fr)); gap:13px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:14px}
+  .adm-top{padding:13px 18px}
+  .adm-body{padding:18px}
+  .panel-head{padding:17px 18px}
+  .panel-body{padding:18px}
+}
+
+@media (max-width:768px){
+  :root{--nav:62px}
+  .container,.container-sm{padding:0 16px}
+  .lq-hero{padding:18px}
+  .lq-hero-in{flex-direction:column; align-items:flex-start; gap:16px}
+  .lq-dial{width:106px; height:106px}
+  .lq-dial b{font-size:41px}
+  .lq-hero-txt{min-width:0; width:100%}
+  .lq-bar{align-items:stretch}
+  .lq-legend{gap:10px}
+  .lq-toggle{flex:1; justify-content:center}
+  .modal-foot .btn{flex:1; min-width:130px; justify-content:center}
+  .row-actions{flex-wrap:wrap}
+  .adm-top-actions{width:100%}
+}
+
+@media (max-width:600px){
+  .stat-grid{grid-template-columns:1fr 1fr; gap:11px}
+  .stat{padding:15px; gap:11px}
+  .stat-ico{width:38px; height:38px; border-radius:11px}
+  .stat-txt b{font-size:24px}
+  .an-grid{grid-template-columns:1fr 1fr; gap:11px}
+  .an-tile{padding:14px}
+  .an-tile b{font-size:21px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(64px,1fr)); gap:11px}
+  .lq-peb{font-size:19px}
+  .lq-peb u{font-size:7.5px; bottom:8px}
+  .lq-pill{font-size:11.5px; padding:7px 11px}
+  .tk-eta{grid-template-columns:repeat(3,1fr); gap:8px}
+  .tk-eta div{padding:10px 6px}
+  .tk-eta b{font-size:17px}
+  .tk-eta small{font-size:8.5px; letter-spacing:.03em}
+  .tk-card{padding:17px}
+  .tk-mine{padding:20px 16px}
+  .tk-ring{width:132px; height:132px}
+  .tk-ring-in b{font-size:38px}
+  .adm-top-actions .btn{flex:1; justify-content:center}
+  .date-pick{flex:1; min-width:0}
+  .date-pick input{min-width:0; width:100%}
+}
+
+@media (max-width:400px){
+  .container,.container-sm{padding:0 13px}
+  .stat-grid,.an-grid{grid-template-columns:1fr}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(58px,1fr)); gap:9px}
+  .lq-peb{font-size:17px}
+  .lq-peb i{width:17px; height:17px; font-size:9px; top:3px; right:3px}
+  .lq-peb u{display:none}
+  .tk-eta{grid-template-columns:1fr}
+  .kv{grid-template-columns:1fr; gap:2px 0}
+  .kv dt{margin-top:9px}
+  .modal-foot .btn{width:100%; flex:none}
+}
+
+/* short screens: landscape phones and split-screen windows */
+@media (max-height:640px){
+  .modal-body{max-height:none}
+}
+@media (max-height:560px) and (min-width:601px){
+  .adm-side{gap:12px; padding:14px}
+  .lq-hero{padding:14px}
+}
+
+/* touch: fingers need bigger targets than a pointer, and a hover state must
+   never be able to "stick" after a tap */
+@media (hover:none) and (pointer:coarse){
+  .btn:not(.btn-icon){min-height:44px}
+  .btn-sm:not(.btn-icon){min-height:38px}
+  .lq-toggle{min-height:42px}
+  .chip{min-height:36px}
+  .lq-cap{padding:6px 8px; font-size:11px}
+  .lq-peb:hover{transform:none}
+  .lq-peb:hover::after{animation:none; opacity:0}
+  .lq-peb:active{transform:scale(.94)}
+  .lq-peb:active::after{opacity:1; animation:lqGlint .9s var(--ease)}
+  .stat:hover,.an-tile:hover,.tk-mini:hover{transform:none; box-shadow:var(--sh1)}
+}
+
+@media print{
+  .adm-side,.adm-top,.nav,.ft,.lq-bar,.row-actions,.toast-wrap{display:none !important}
+  .adm{grid-template-columns:1fr}
+  .adm-body{padding:0}
+  .lq-peb{box-shadow:none; border:1px solid #999; color:#000; background:#fff}
+  .lq-peb::before,.lq-peb::after{display:none}
+}
+`;
+
 let stylesInjected = false;
 
 function injectStyles() {
   if (stylesInjected || typeof document === 'undefined') return;
+
+  /* Vite's starter index.html ships the viewport tag, but if it was ever edited
+     out, NOTHING below would scale on a phone - it would render desktop-wide
+     and zoomed out. Guaranteeing it here makes responsiveness independent of
+     that file, which keeps this a two-file project. */
+  let viewport = document.querySelector('meta[name="viewport"]');
+  if (!viewport) {
+    viewport = document.createElement('meta');
+    viewport.setAttribute('name', 'viewport');
+    document.head.appendChild(viewport);
+  }
+  viewport.setAttribute('content', 'width=device-width, initial-scale=1, viewport-fit=cover');
+
   const existing = document.getElementById('mcf-styles');
   if (existing) existing.remove();
   const tag = document.createElement('style');
   tag.id = 'mcf-styles';
-  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE;
+  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_RESP;
   document.head.appendChild(tag);
   stylesInjected = true;
 }
@@ -3290,13 +3523,23 @@ function QueueTrackPage({ clinicId, go }) {
     loadBoard(false);
   }, [loadBoard]);
 
-  /* Polling instead of sockets: it survives sleeping phones, proxies and the
-     Vite dev server, and a 15s board is indistinguishable from live here. */
+  /* REALTIME. The clinic pushes a new board the instant a token is called, so
+     the patient's screen moves without waiting for any timer. The pushed
+     payload is already exactly the public board shape, so it is applied
+     DIRECTLY - no refetch round trip, no flicker. */
+  const socketLive = useQueueSocket(tClinic, tDate, (payload) => {
+    if (!payload || !payload.live) return;
+    setBoard((prev) => (prev ? Object.assign({}, prev, { live: payload.live }) : prev));
+    setBeat(Date.now());
+  });
+
+  /* Polling stays as a safety net for sleeping phones, flaky proxies, and any
+     deployment where socket.io is not installed on the backend. */
   useEffect(() => {
     if (!auto || !tClinic) return undefined;
-    const id = window.setInterval(() => loadBoard(true), 15000);
+    const id = window.setInterval(() => loadBoard(true), socketLive ? 45000 : 15000);
     return () => window.clearInterval(id);
-  }, [auto, tClinic, loadBoard]);
+  }, [auto, tClinic, loadBoard, socketLive]);
 
   useEffect(() => {
     const id = window.setInterval(() => setTick(Date.now()), 1000);
@@ -3391,7 +3634,7 @@ function QueueTrackPage({ clinicId, go }) {
         <div className="lq-hero-txt">
           <span className="lq-live">
             <span className={'lq-dot' + (auto ? '' : ' off')} />
-            {auto ? 'Live' : 'Paused'}
+            {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
             {beat ? ' - updated ' + agoSec + 's ago' : ''}
           </span>
           <h2 style={{ marginTop: 8 }}>
@@ -4216,7 +4459,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
 
           {/* ---------------------------------------------- live queue status */}
           {tab === 'queue' ? (
-            <LiveQueueTab date={date} setDate={setDate} notify={notify} onExpired={signOut} onChanged={refreshAll} />
+            <LiveQueueTab clinicId={clinic ? clinic.clinicId : ''} date={date} setDate={setDate} notify={notify} onExpired={signOut} onChanged={refreshAll} />
           ) : null}
 
           {/* -------------------------------------------------- appointments */}
@@ -4628,7 +4871,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
    that is the single most repeated action of a clinic day, so it must not cost
    a confirmation click. Tapping a visited token asks first, because undoing a
    consultation is the destructive direction. */
-function LiveQueueTab({ date, setDate, notify, onExpired, onChanged }) {
+function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged }) {
   const [tokens, setTokens] = useState([]);
   const [live, setLive] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -4663,13 +4906,20 @@ function LiveQueueTab({ date, setDate, notify, onExpired, onChanged }) {
     load(false);
   }, [load]);
 
-  /* Silent polling keeps the pad honest when reception and the doctor are both
-     working the same queue from different screens. */
+  /* REALTIME. Any change - made on this screen, on another reception screen, or
+     by a patient booking online - pushes a fresh board over Socket.IO within
+     milliseconds. The admin pad REFETCHES rather than trusting the pushed
+     payload, because it also needs patient names, which the public broadcast
+     deliberately leaves out. */
+  const socketLive = useQueueSocket(clinicId, date, () => load(true));
+
+  /* Polling is now only a safety net: relaxed while the socket is connected,
+     brisk when it is not, so the pad still self-heals without Socket.IO. */
   useEffect(() => {
     if (!auto) return undefined;
-    const id = window.setInterval(() => load(true), 12000);
+    const id = window.setInterval(() => load(true), socketLive ? 45000 : 12000);
     return () => window.clearInterval(id);
-  }, [auto, load]);
+  }, [auto, load, socketLive]);
 
   const apply = async (row, next) => {
     setBusy(row.id);
@@ -4752,7 +5002,7 @@ function LiveQueueTab({ date, setDate, notify, onExpired, onChanged }) {
           <div className="lq-hero-txt">
             <span className="lq-live">
               <span className={'lq-dot' + (auto ? '' : ' off')} />
-              {auto ? 'Live' : 'Paused'}
+              {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
             </span>
             <h2 style={{ marginTop: 8 }}>
               {current ? 'Token ' + current + ' is with the doctor' : 'No token called yet'}
@@ -4830,7 +5080,8 @@ function LiveQueueTab({ date, setDate, notify, onExpired, onChanged }) {
                 <Icon name={names ? 'user' : 'users'} size={14} /> {names ? 'Names on' : 'Names off'}
               </button>
               <button className={'lq-toggle' + (auto ? ' on' : '')} onClick={() => setAuto((v) => !v)}>
-                <span className={'lq-dot' + (auto ? '' : ' off')} /> {auto ? 'Auto refresh' : 'Paused'}
+                <span className={'lq-dot' + (auto ? '' : ' off')} />{' '}
+                {socketLive ? 'Realtime on' : auto ? 'Auto refresh' : 'Paused'}
               </button>
             </div>
           </div>

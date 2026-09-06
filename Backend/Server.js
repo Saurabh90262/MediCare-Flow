@@ -3,7 +3,7 @@
  * Multi-clinic appointment + queue platform. MERN / MongoDB Atlas.
  *
  * SETUP
- *   npm install express mongoose cors dotenv node-cron bcryptjs jsonwebtoken
+ *   npm install express mongoose cors dotenv node-cron bcryptjs jsonwebtoken socket.io
  *   node Server.js        (or: nodemon Server.js)
  *
  * Backend/.env
@@ -46,9 +46,22 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const crypto = require('crypto');
+const http = require('http');
 const cron = require('node-cron');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+
+/* Socket.IO is loaded OPTIONALLY on purpose. If the package is not installed
+   the API still boots exactly as before and every screen falls back to its
+   polling timer, so a forgotten "npm install socket.io" can never take the
+   queue offline. Check GET /api/health to see which mode is active. */
+let SocketServer = null;
+try {
+  SocketServer = require('socket.io').Server;
+} catch (_socketIoNotInstalled) {
+  SocketServer = null;
+}
+let io = null;
 
 /* ---------------------------------------------------------------- config -- */
 
@@ -677,6 +690,8 @@ app.get('/api/health', (_req, res) =>
     timezone: TZ,
     today: todayStr(),
     port: PORT,
+    realtime: io ? 'socket.io live' : 'polling only - run: npm install socket.io',
+    liveViewers: io && io.engine ? io.engine.clientsCount : 0,
   })
 );
 
@@ -816,6 +831,32 @@ async function liveQueue(clinicId, date) {
       source: row.source,
     })),
   };
+}
+
+/* ------------------------------------------------------------- realtime -- */
+
+// One room per clinic per day, so a clinic only ever wakes up its own viewers.
+function queueRoom(clinicId, date) {
+  return 'queue:' + clinicId + ':' + date;
+}
+
+// Pushes a fresh board to everyone watching this clinic/day. The payload is the
+// same PII-free shape as GET /api/clinics/:clinicId/live - token numbers and
+// statuses only, never names, mobiles or emails - so it is safe to broadcast to
+// unauthenticated patients. Never throws: a broken socket must not fail a write.
+async function broadcastQueue(clinicId, date, reason) {
+  if (!io || !clinicId || !date) return;
+  try {
+    const live = await liveQueue(clinicId, date);
+    io.to(queueRoom(clinicId, date)).emit('queue:update', {
+      clinicId,
+      date,
+      reason: reason || 'change',
+      live,
+    });
+  } catch (error) {
+    console.error('[warn] Queue broadcast failed:', error.message);
+  }
 }
 
 app.get(
@@ -1356,6 +1397,8 @@ app.post(
       html: confirmEmail(clinic, appointment),
     }).catch(() => {});
 
+    broadcastQueue(clinicId, appointment.date, 'new-booking').catch(() => {});
+
     return res.json({
       success: true,
       message: 'Appointment booked successfully.',
@@ -1534,6 +1577,10 @@ async function setStatus(req, res, status) {
     }
   }
 
+  // Wake up every live viewer before answering. Fire-and-forget: the write is
+  // already committed, so a socket problem must never fail the request.
+  broadcastQueue(req.clinicId, appointment.date, status).catch(() => {});
+
   const words = { visited: 'marked as visited', booked: 'reverted to unvisited', cancelled: 'cancelled' };
   return res.json({
     success: true,
@@ -1628,6 +1675,8 @@ app.post(
         html: confirmEmail(clinic, appointment),
       }).catch(() => {});
     }
+
+    broadcastQueue(req.clinicId, appointment.date, 'walk-in').catch(() => {});
 
     return res.status(201).json({
       success: true,
@@ -1737,7 +1786,51 @@ process.on('uncaughtException', (error) => console.error('[ERROR] Uncaught excep
 
 /* -------------------------------------------------------------- start up -- */
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+/* ------------------------------------------------- realtime queue sockets -- */
+
+if (SocketServer) {
+  io = new SocketServer(server, {
+    // The frontend is served from a different origin in dev (5173 -> 5000).
+    cors: { origin: true, methods: ['GET', 'POST'], credentials: false },
+    pingInterval: 25000,
+    pingTimeout: 20000,
+  });
+
+  io.on('connection', (socket) => {
+    /* A viewer watches exactly one clinic/day board at a time. Joining a new
+       board leaves the previous one, so switching clinics or dates can never
+       leave a socket subscribed to a queue nobody is looking at. */
+    socket.on('queue:join', async (payload) => {
+      const clinicId = str(payload && payload.clinicId);
+      const date = str(payload && payload.date) || todayStr();
+      if (!clinicId) return;
+
+      for (const room of Array.from(socket.rooms)) {
+        if (room !== socket.id) socket.leave(room);
+      }
+      socket.join(queueRoom(clinicId, date));
+
+      // Send the current board immediately so a new viewer never waits for the
+      // next change to see something.
+      try {
+        const live = await liveQueue(clinicId, date);
+        socket.emit('queue:update', { clinicId, date, reason: 'join', live });
+      } catch (_error) {
+        socket.emit('queue:error', { message: 'That queue could not be loaded.' });
+      }
+    });
+
+    socket.on('queue:leave', () => {
+      for (const room of Array.from(socket.rooms)) {
+        if (room !== socket.id) socket.leave(room);
+      }
+    });
+  });
+}
+
+server.listen(PORT, () => {
   console.log('');
   console.log('  ' + BRAND + ' API');
   console.log('  ------------------------------------------------------');
@@ -1745,6 +1838,7 @@ app.listen(PORT, () => {
   console.log('  Health      http://localhost:' + PORT + '/api/health');
   console.log('  Database    ' + (MONGODB_URI ? DB_NAME + ' (connecting...)' : 'MONGODB_URI missing in .env'));
   console.log('  Mailer      ' + (GOOGLE_SCRIPT_URL ? 'Google Apps Script configured' : 'GOOGLE_SCRIPT_URL missing in .env'));
+  console.log('  Realtime    ' + (io ? 'Socket.IO live on /socket.io' : 'polling only - run: npm install socket.io'));
   console.log('  Timezone    ' + TZ + '  (today = ' + todayStr() + ')');
   console.log('  Cleanup     appointments older than ' + CLEANUP_DAYS + ' days, daily at midnight');
   console.log('  Booking     today + next ' + BOOKING_DAYS + ' days');
