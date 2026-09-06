@@ -13,6 +13,7 @@
  *   JWT_SECRET=any-long-random-string
  *   GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/XXXX/exec
  *   TIMEZONE=Asia/Kolkata
+ *   KEEPALIVE_MINUTES=14        (0 disables the Render keep-alive ping)
  *
  * This file is intentionally 100% ASCII so it can never be corrupted by an
  * editor saving it as ANSI / UTF-16 (that is what causes the mysterious
@@ -71,6 +72,9 @@ const DB_NAME = process.env.DB_NAME || 'medicareflow';
 const JWT_SECRET = process.env.JWT_SECRET || 'medicare-flow-dev-secret-change-me';
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || '';
 const TZ = process.env.TIMEZONE || 'Asia/Kolkata';
+// Render injects RENDER_EXTERNAL_URL on its own; KEEPALIVE_URL overrides it.
+const KEEPALIVE_URL = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '';
+const KEEPALIVE_MINUTES = Number(process.env.KEEPALIVE_MINUTES || 14);
 
 const BRAND = 'MediCare Flow';
 const CLEANUP_DAYS = 15; // appointments older than this are deleted nightly
@@ -692,6 +696,11 @@ app.get('/api/health', (_req, res) =>
     port: PORT,
     realtime: io ? 'socket.io live' : 'polling only - run: npm install socket.io',
     liveViewers: io && io.engine ? io.engine.clientsCount : 0,
+    keepAlive: keepAlive.enabled
+      ? 'every ' + keepAlive.minutes + ' min (ok ' + keepAlive.pings + ', failed ' + keepAlive.failed + ')'
+      : 'off',
+    keepAliveTarget: keepAlive.target || null,
+    lastKeepAliveAt: keepAlive.lastPingAt,
   })
 );
 
@@ -1830,7 +1839,84 @@ if (SocketServer) {
   });
 }
 
+/* ------------------------------------------------------------ keep-alive -- */
+
+/* Render free instances spin down after ~15 minutes with no inbound traffic.
+   This pings our own public /api/health on a timer, so the instance keeps
+   receiving real requests through the Render edge and never goes cold.
+
+   Two honest limits, worth knowing before relying on it:
+     1. It only works while the process is ALREADY awake. If the instance does
+        sleep - a deploy, a crash, a missed window - nothing in here can wake
+        it back up. Only a real visitor or an external pinger can do that.
+     2. Staying up 24/7 uses roughly 730 of the 750 free instance-hours Render
+        grants per account per month. That fits ONE always-on free service.
+        A second one will exhaust the quota and suspend both.
+
+   Set KEEPALIVE_MINUTES=0 to turn this off without touching code. */
+
+const keepAlive = {
+  enabled: false,
+  target: '',
+  minutes: 0,
+  pings: 0,
+  failed: 0,
+  lastPingAt: null,
+  lastError: null,
+};
+
+let keepAliveBusy = false;
+
+async function pingSelf() {
+  if (keepAliveBusy) return; // a slow response must never let pings stack up
+  keepAliveBusy = true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(keepAlive.target, {
+      method: 'GET',
+      headers: { 'User-Agent': BRAND + ' keep-alive' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const recovered = keepAlive.lastError !== null;
+    keepAlive.pings += 1;
+    keepAlive.lastPingAt = new Date().toISOString();
+    keepAlive.lastError = null;
+    // Deliberately quiet: a log line every 14 minutes forever would bury the
+    // logs that actually matter. Only the first ping and recoveries speak up.
+    if (keepAlive.pings === 1 || recovered) {
+      console.log('[OK] Keep-alive ping succeeded -> ' + keepAlive.target);
+    }
+  } catch (error) {
+    keepAlive.failed += 1;
+    keepAlive.lastError = error.name === 'AbortError' ? 'Ping timed out after 15s.' : error.message;
+    console.warn('[warn] Keep-alive ping failed:', keepAlive.lastError);
+  } finally {
+    clearTimeout(timer);
+    keepAliveBusy = false;
+  }
+}
+
+function startKeepAlive() {
+  if (!KEEPALIVE_URL) return; // local dev, or RENDER_EXTERNAL_URL not provided
+  if (!(KEEPALIVE_MINUTES > 0)) return; // explicitly disabled
+
+  const base = KEEPALIVE_URL.replace(/\/+$/, '');
+  // Pinging localhost would loop inside the box and keep nothing awake.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(base)) return;
+
+  keepAlive.enabled = true;
+  keepAlive.minutes = KEEPALIVE_MINUTES;
+  keepAlive.target = base + '/api/health';
+
+  // The first ping waits a minute so it never competes with cold-start work.
+  setTimeout(pingSelf, 60 * 1000);
+  setInterval(pingSelf, KEEPALIVE_MINUTES * 60 * 1000);
+}
+
 server.listen(PORT, () => {
+  startKeepAlive();
   console.log('');
   console.log('  ' + BRAND + ' API');
   console.log('  ------------------------------------------------------');
@@ -1842,5 +1928,11 @@ server.listen(PORT, () => {
   console.log('  Timezone    ' + TZ + '  (today = ' + todayStr() + ')');
   console.log('  Cleanup     appointments older than ' + CLEANUP_DAYS + ' days, daily at midnight');
   console.log('  Booking     today + next ' + BOOKING_DAYS + ' days');
+  console.log(
+    '  Keep-alive  ' +
+      (keepAlive.enabled
+        ? 'every ' + keepAlive.minutes + ' min -> ' + keepAlive.target
+        : 'off (set KEEPALIVE_URL, or deploy on Render)')
+  );
   console.log('');
 });
