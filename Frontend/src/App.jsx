@@ -101,12 +101,54 @@ const setStoredClinic = (clinic) => {
   }
 };
 
+/* The owner session is stored under its OWN keys. Keeping it separate from the
+   clinic session means signing out of one never touches the other, and a
+   clinic token can never be sent to an owner-only route by accident. */
+const OWNER_TOKEN_KEY = 'mcf_owner_token';
+const OWNER_KEY = 'mcf_owner';
+
+const getOwnerToken = () => {
+  try {
+    return window.localStorage.getItem(OWNER_TOKEN_KEY) || '';
+  } catch (_error) {
+    return '';
+  }
+};
+
+const setOwnerToken = (value) => {
+  try {
+    if (value) window.localStorage.setItem(OWNER_TOKEN_KEY, value);
+    else window.localStorage.removeItem(OWNER_TOKEN_KEY);
+  } catch (_error) {
+    /* ignore */
+  }
+};
+
+const getStoredOwner = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(OWNER_KEY) || 'null');
+  } catch (_error) {
+    return null;
+  }
+};
+
+const setStoredOwner = (value) => {
+  try {
+    if (value) window.localStorage.setItem(OWNER_KEY, JSON.stringify(value));
+    else window.localStorage.removeItem(OWNER_KEY);
+  } catch (_error) {
+    /* ignore */
+  }
+};
+
 /* ------------------------------------------------------------ api client -- */
 
 async function api(path, options = {}) {
-  const { method = 'GET', body, auth = false } = options;
+  const { method = 'GET', body, auth = false, owner = false } = options;
   const headers = { 'Content-Type': 'application/json' };
-  if (auth) headers.Authorization = 'Bearer ' + getToken();
+  // owner beats auth: the two sessions are never mixed on one request.
+  if (owner) headers.Authorization = 'Bearer ' + getOwnerToken();
+  else if (auth) headers.Authorization = 'Bearer ' + getToken();
 
   let response;
   try {
@@ -1258,6 +1300,85 @@ const CSS_QUEUE = `
  *   400    small phone              short/touch/print special cases
  * ========================================================================== */
 
+/* ============================================================================
+ * MASTER ADMIN PANEL - platform owner console
+ * Reuses the existing .adm shell, .stat cards, .tbl tables and .btn system so
+ * the owner panel is visually identical to a clinic dashboard. Status colour is
+ * carried on the card via currentColor, exactly like .stat does.
+ * ========================================================================== */
+
+const CSS_OWNER = `
+.own-gate{
+  min-height:100vh; display:grid; place-items:center; padding:24px;
+  background:
+    radial-gradient(1100px 560px at 12% -12%, rgba(14,165,233,.20), transparent 60%),
+    radial-gradient(900px 500px at 112% 8%, rgba(124,58,237,.18), transparent 55%),
+    #06282b;
+}
+.own-gate-card{width:100%; max-width:430px; background:#fff; border-radius:var(--r4); padding:32px; box-shadow:var(--sh4); animation:fadeUp .45s var(--ease)}
+.own-gate-card h2{font-size:22px; margin:14px 0 6px}
+.own-gate-card > .lead{color:var(--muted); font-size:13.5px; margin-bottom:22px; line-height:1.65}
+.own-gate-foot{margin-top:18px; padding-top:16px; border-top:1px solid var(--border2); font-size:12.5px; color:var(--light); line-height:1.7}
+
+.own-bar{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+.own-bar .input-icon{flex:1 1 260px; min-width:0}
+.own-seg{display:inline-flex; padding:4px; gap:4px; background:#fff; border:1px solid var(--border); border-radius:999px; box-shadow:var(--sh1)}
+.own-seg button{display:flex; align-items:center; gap:7px; padding:8px 15px; border-radius:999px; font-size:13px; font-weight:600; color:var(--muted); transition:all .22s var(--ease)}
+.own-seg button:hover{color:var(--text)}
+.own-seg button.on{background:var(--grad); color:#fff; box-shadow:0 6px 16px rgba(15,118,110,.28)}
+
+.own-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(318px,1fr)); gap:18px}
+.own-card{
+  position:relative; overflow:hidden; display:flex; flex-direction:column; gap:14px; padding:20px;
+  background:#fff; border:1px solid var(--border); border-radius:var(--r3); box-shadow:var(--sh1);
+  transition:transform .26s var(--ease), box-shadow .26s var(--ease);
+}
+.own-card:hover{transform:translateY(-4px); box-shadow:var(--sh3)}
+.own-card::before{content:''; position:absolute; inset:0 0 auto 0; height:3px; background:currentColor; opacity:.9}
+.own-card.pend{color:var(--amber)}
+.own-card.appr{color:var(--gr)}
+.own-card.rej{color:var(--red)}
+.own-card.hid{color:var(--pr3)}
+.own-card-top{display:flex; gap:13px; align-items:center; min-width:0}
+.own-card-top .cc-av{width:48px; height:48px; border-radius:14px; font-size:16px; flex:none; box-shadow:none}
+.own-card-id{min-width:0; flex:1}
+.own-card-id b{display:block; font-family:'Sora',sans-serif; font-size:15.5px; color:var(--text); font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.own-card-id span{display:block; font-size:12.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.own-meta{display:flex; flex-direction:column; gap:7px}
+.own-meta div{display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:var(--muted); min-width:0}
+.own-meta .ico{flex:none; margin-top:1px; color:var(--light)}
+.own-meta span{min-width:0; word-break:break-word}
+.own-tags{display:flex; gap:7px; flex-wrap:wrap; align-items:center}
+.own-actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:auto; padding-top:14px; border-top:1px solid var(--border2)}
+
+.own-st{display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; white-space:nowrap}
+.own-st.pend{background:#fef3c7; color:#92400e}
+.own-st.appr{background:#dcfce7; color:#166534}
+.own-st.rej{background:#fee2e2; color:#991b1b}
+.own-st.hid{background:#e0f2fe; color:#075985}
+
+.own-empty{padding:54px 24px; text-align:center; background:#fff; border:1px dashed var(--border); border-radius:var(--r3); color:var(--muted)}
+.own-empty .ico{color:var(--light); margin-bottom:12px}
+.own-empty b{display:block; font-family:'Sora',sans-serif; color:var(--text); font-size:16.5px; margin-bottom:6px}
+.own-note{background:#fffbeb; border:1px solid #fcd34d; border-radius:var(--r2); padding:13px 16px; font-size:13px; color:#92400e; line-height:1.65}
+.own-cell-sub{display:block; font-size:11.5px; color:var(--light)}
+
+/* Approval banner shown to a CLINIC inside its own dashboard. */
+.lst-banner{display:flex; gap:13px; align-items:flex-start; padding:16px 18px; border-radius:var(--r2); font-size:13.5px; line-height:1.65; animation:fadeUp .4s var(--ease)}
+.lst-banner .ico{flex:none; margin-top:2px}
+.lst-banner b{display:block; font-size:14.5px; margin-bottom:3px}
+.lst-banner.pend{background:#fffbeb; border:1px solid #fcd34d; color:#92400e}
+.lst-banner.rej{background:#fef2f2; border:1px solid #fca5a5; color:#991b1b}
+.lst-banner.hid{background:#f0f9ff; border:1px solid #7dd3fc; color:#075985}
+
+@media (max-width:520px){
+  .own-grid{grid-template-columns:1fr}
+  .own-seg{width:100%}
+  .own-seg button{flex:1; justify-content:center}
+  .own-gate-card{padding:24px}
+}
+`;
+
 const CSS_RESP = `
 /* long emails, addresses and booking ids must wrap, never widen the page */
 .kv dd,.tk-mini b,.tk-mini small,.who b,.contact span,.lq-cap,.adm-clinic{overflow-wrap:anywhere; word-break:break-word}
@@ -1410,7 +1531,7 @@ function injectStyles() {
   if (existing) existing.remove();
   const tag = document.createElement('style');
   tag.id = 'mcf-styles';
-  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_RESP;
+  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_RESP;
   document.head.appendChild(tag);
   stylesInjected = true;
 }
@@ -1441,6 +1562,8 @@ function parseHash() {
   // #/track and #/queue are the same screen. The optional second segment lets
   // a clinic hand out a direct link to its own live board.
   if (head === 'track' || head === 'queue') return { name: 'track', id: second || '', query };
+  // #/owner is the platform owner console - intentionally not linked in the nav.
+  if (head === 'owner') return { name: 'owner', id: second || '', query };
   if (['register', 'login', 'forgot'].includes(head)) return { name: head, id: '', query };
   return { name: 'home', id: '', query };
 }
@@ -1792,7 +1915,12 @@ function Footer({ go }) {
         </div>
         <div className="ft-base">
           <span>{BRAND} - built on the MTSS booking engine.</span>
-          <span>Appointment records auto-clear after 15 days.</span>
+          <span>
+            Appointment records auto-clear after 15 days.{' '}
+            <button className="btn-link" onClick={() => go('/owner')}>
+              Master admin
+            </button>
+          </span>
         </div>
       </div>
     </footer>
@@ -4332,6 +4460,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         </div>
 
         <div className="adm-body">
+          <ListingStatusBanner clinic={clinic} />
           {error ? <Alert kind="err">{error}</Alert> : null}
 
           {/* ------------------------------------------------------ overview */}
@@ -5575,6 +5704,986 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
  * ROOT
  * ========================================================================== */
 
+/* ============================================================================
+ * MASTER ADMIN PANEL - platform owner console
+ *
+ * A completely separate privilege level from a clinic dashboard: its own login,
+ * its own localStorage keys and its own Bearer token. Reached at #/owner.
+ * ========================================================================== */
+
+/* Shown to a CLINIC inside its own dashboard, so a clinic always understands
+   why it is or is not on the public homepage. Renders nothing once a listing is
+   approved and visible, which is the normal steady state. */
+function ListingStatusBanner({ clinic }) {
+  if (!clinic) return null;
+  const status = clinic.status || 'approved';
+  if (status === 'approved' && !clinic.hidden) return null;
+
+  if (status === 'pending') {
+    return (
+      <div className="lst-banner pend">
+        <Icon name="clock" size={19} />
+        <div>
+          <b>Awaiting approval</b>
+          Your clinic is registered and this dashboard is fully usable, but the listing is not on the public homepage yet.
+          Every new clinic is reviewed before going live - we will email you the moment it is approved, and online booking
+          opens at the same time.
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'rejected') {
+    return (
+      <div className="lst-banner rej">
+        <Icon name="ban" size={19} />
+        <div>
+          <b>Listing not approved</b>
+          {clinic.rejectionNote ? 'Reason given: ' + clinic.rejectionNote + ' ' : ''}
+          Your admin account still works. Correct your details in Clinic settings, then reply to the notification email to
+          ask for another review.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="lst-banner hid">
+      <Icon name="alert" size={19} />
+      <div>
+        <b>Temporarily hidden from the homepage</b>
+        New patients cannot discover you in the public directory right now. Your live queue, existing tokens and direct
+        booking links all keep working normally.
+      </div>
+    </div>
+  );
+}
+
+function OwnerLoginPage({ onSignedIn, notify, go }) {
+  const [form, setForm] = useState({ userId: '', password: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    const data = await api('/owner/login', { method: 'POST', body: form });
+    setBusy(false);
+    if (!data.success) {
+      setError(data.message);
+      return;
+    }
+    setOwnerToken(data.token);
+    setStoredOwner(data.owner);
+    notify(data.message, 'ok');
+    onSignedIn(data.owner);
+  };
+
+  return (
+    <div className="own-gate">
+      <form className="own-gate-card" onSubmit={submit} noValidate>
+        <button type="button" className="brand" onClick={() => go('/')}>
+          <span className="brand-mark">
+            <Cross size={19} />
+          </span>
+          MediCare <i>Flow</i>
+        </button>
+
+        <span className="eyebrow">
+          <Icon name="shield" size={13} /> Platform owner
+        </span>
+        <h2>Master admin panel</h2>
+        <p className="lead">Approve clinic listings, edit them, hide them or remove them. This console is not linked from the public navigation.</p>
+
+        <div className="form-grid">
+          <div className="field">
+            <label>Owner ID</label>
+            <div className="input-icon">
+              <Icon name="user" size={17} />
+              <input
+                className="input"
+                required
+                value={form.userId}
+                onChange={(event) => setForm({ ...form, userId: event.target.value })}
+                placeholder="owner"
+                autoComplete="username"
+              />
+            </div>
+          </div>
+          <div className="field">
+            <label>Password</label>
+            <div className="input-icon">
+              <Icon name="shield" size={17} />
+              <input
+                className="input"
+                required
+                type="password"
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                placeholder="Your owner password"
+                autoComplete="current-password"
+              />
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div style={{ marginTop: 16 }}>
+            <Alert kind="err">{error}</Alert>
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: 18 }}>
+          <button className="btn btn-primary btn-lg btn-block" disabled={busy}>
+            {busy ? (
+              <>
+                <Spinner /> Signing in...
+              </>
+            ) : (
+              <>
+                Open master panel <Icon name="right" size={17} />
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="own-gate-foot">
+          Credentials come from OWNER_ID and OWNER_PASSWORD in the backend .env file - there is no owner account in the
+          database, so this login cannot be created or changed through the API.
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* Add and edit share one modal. In edit mode the password field is optional and
+   is only sent when actually filled in, so saving never resets a password by
+   accident. clinicId is never editable: it is the tenant key stamped on every
+   appointment row. */
+function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
+  const editing = Boolean(clinic);
+  const [form, setForm] = useState({
+    clinicName: editing ? clinic.clinicName || '' : '',
+    doctorName: editing ? clinic.doctorName || '' : '',
+    specialization: editing ? clinic.specialization || 'General Physician' : 'General Physician',
+    address: editing ? clinic.address || '' : '',
+    city: editing ? clinic.city || '' : '',
+    phone: editing ? clinic.phone || '' : '',
+    timings: editing ? clinic.timings || '' : '',
+    photo: editing ? clinic.photo || '' : '',
+    about: editing ? clinic.about || '' : '',
+    adminUserId: editing ? clinic.adminUserId || '' : '',
+    adminEmail: editing ? clinic.adminEmail || '' : '',
+    password: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const set = (key) => (event) => setForm((prev) => Object.assign({}, prev, { [key]: event.target.value }));
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+
+    const body = Object.assign({}, form);
+    if (editing && !body.password) delete body.password;
+
+    const data = editing
+      ? await api('/owner/clinics/' + clinic.clinicId, { method: 'PUT', owner: true, body })
+      : await api('/owner/clinics', { method: 'POST', owner: true, body });
+
+    setBusy(false);
+    if (!data.success) {
+      if (data.unauthorized) {
+        onExpired();
+        return;
+      }
+      setError(data.message);
+      return;
+    }
+    notify(data.message, 'ok');
+    onSaved();
+    close();
+  };
+
+  return (
+    <Modal
+      wide
+      title={editing ? 'Edit listing' : 'Add a listing'}
+      subtitle={
+        editing
+          ? clinic.clinicName + ' - changes go live immediately'
+          : 'Owner-created listings skip the approval queue and are published straight away'
+      }
+      onClose={close}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" form="listing-form" disabled={busy}>
+            {busy ? (
+              <>
+                <Spinner /> Saving...
+              </>
+            ) : (
+              <>
+                <Icon name="check" size={16} /> {editing ? 'Save changes' : 'Add and publish'}
+              </>
+            )}
+          </button>
+        </>
+      }
+    >
+      <form id="listing-form" className="form-grid" onSubmit={submit} noValidate>
+        <div className="field">
+          <label>
+            Clinic / hospital name <span className="req">*</span>
+          </label>
+          <input className="input" required value={form.clinicName} onChange={set('clinicName')} placeholder="Vrindavan Hospital" />
+        </div>
+
+        <div className="field">
+          <label>
+            Doctor name <span className="req">*</span>
+          </label>
+          <input className="input" required value={form.doctorName} onChange={set('doctorName')} placeholder="Dr. Arnav Tyagi (MBBS)" />
+        </div>
+
+        <div className="field">
+          <label>
+            Specialization <span className="req">*</span>
+          </label>
+          <select className="select" value={form.specialization} onChange={set('specialization')}>
+            {SPECIALIZATIONS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>
+            Address <span className="req">*</span>
+          </label>
+          <textarea className="textarea" required rows={2} value={form.address} onChange={set('address')} placeholder="Street, area, landmark" />
+        </div>
+
+        <div className="field">
+          <label>City</label>
+          <input className="input" value={form.city} onChange={set('city')} placeholder="Agartala" />
+        </div>
+
+        <div className="field">
+          <label>
+            Clinic phone (10 digits) <span className="req">*</span>
+          </label>
+          <input className="input" required inputMode="numeric" maxLength={10} value={form.phone} onChange={set('phone')} placeholder="9876543210" />
+        </div>
+
+        <div className="field">
+          <label>Opening hours</label>
+          <input className="input" value={form.timings} onChange={set('timings')} placeholder="Mon-Sat, 9:00 AM - 2:00 PM" />
+        </div>
+
+        <div className="field">
+          <label>Photo URL</label>
+          <input className="input" value={form.photo} onChange={set('photo')} placeholder="https://..." />
+        </div>
+
+        <div className="field">
+          <label>About</label>
+          <textarea className="textarea" rows={3} value={form.about} onChange={set('about')} placeholder="A short description shown on the public page." />
+        </div>
+
+        <div className="field">
+          <label>
+            Admin user ID <span className="req">*</span>
+          </label>
+          <input className="input" required value={form.adminUserId} onChange={set('adminUserId')} placeholder="vrindavan.admin" autoComplete="off" />
+        </div>
+
+        <div className="field">
+          <label>
+            Admin email <span className="req">*</span>
+          </label>
+          <input className="input" required type="email" value={form.adminEmail} onChange={set('adminEmail')} placeholder="clinic@example.com" />
+        </div>
+
+        <div className="field">
+          <label>
+            {editing ? 'New password' : 'Password'} {editing ? null : <span className="req">*</span>}
+          </label>
+          <input
+            className="input"
+            required={!editing}
+            type="password"
+            value={form.password}
+            onChange={set('password')}
+            placeholder={editing ? 'Leave blank to keep the current password' : 'At least 6 characters'}
+            autoComplete="new-password"
+          />
+        </div>
+
+        {error ? <Alert kind="err">{error}</Alert> : null}
+      </form>
+    </Modal>
+  );
+}
+
+function OwnerPanel({ go, notify }) {
+  const [owner, setOwner] = useState(getStoredOwner());
+  const [booting, setBooting] = useState(true);
+  const [tab, setTab] = useState('requests');
+  const [view, setView] = useState('cards');
+  const [search, setSearch] = useState('');
+  const [term, setTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [visibility, setVisibility] = useState('all');
+  const [overview, setOverview] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [sidebar, setSidebar] = useState(false);
+  const [formState, setFormState] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const [note, setNote] = useState('');
+  const [busyId, setBusyId] = useState('');
+
+  const signOut = useCallback(
+    (message) => {
+      setOwnerToken('');
+      setStoredOwner(null);
+      setOwner(null);
+      setRows([]);
+      setOverview(null);
+      if (message) notify(message, 'warn');
+    },
+    [notify]
+  );
+
+  // Verify a stored token against the server before trusting it.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!getOwnerToken()) {
+        if (alive) setBooting(false);
+        return;
+      }
+      const data = await api('/owner/me', { owner: true });
+      if (!alive) return;
+      if (data.success) {
+        setOwner(data.owner);
+        setStoredOwner(data.owner);
+      } else {
+        setOwnerToken('');
+        setStoredOwner(null);
+        setOwner(null);
+      }
+      setBooting(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Debounce typing so each keystroke does not fire a query.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTerm(search.trim()), 320);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const load = useCallback(
+    async (silent) => {
+      if (!silent) setLoading(true);
+      setError('');
+
+      const params = [];
+      if (term) params.push('search=' + encodeURIComponent(term));
+      if (tab === 'listings') {
+        if (statusFilter !== 'all') params.push('status=' + encodeURIComponent(statusFilter));
+        if (visibility !== 'all') params.push('visibility=' + encodeURIComponent(visibility));
+      }
+      const base = tab === 'requests' ? '/owner/requests' : '/owner/clinics';
+      const path = base + (params.length ? '?' + params.join('&') : '');
+
+      const [list, counts] = await Promise.all([api(path, { owner: true }), api('/owner/overview', { owner: true })]);
+
+      if (list.unauthorized || counts.unauthorized) {
+        signOut('Your owner session expired. Please sign in again.');
+        setLoading(false);
+        return;
+      }
+      if (list.success) setRows(list.clinics || []);
+      else setError(list.message);
+      if (counts.success) setOverview(counts.counts);
+      setLoading(false);
+    },
+    [tab, term, statusFilter, visibility, signOut]
+  );
+
+  useEffect(() => {
+    if (owner) load();
+  }, [owner, load]);
+
+  const act = async (clinic, kind, payload) => {
+    setBusyId(clinic.clinicId);
+    const base = '/owner/clinics/' + encodeURIComponent(clinic.clinicId);
+    let data;
+    if (kind === 'approve') data = await api(base + '/approve', { method: 'PUT', owner: true });
+    else if (kind === 'reject') data = await api(base + '/reject', { method: 'PUT', owner: true, body: { note: payload || '' } });
+    else if (kind === 'hide') data = await api(base + '/visibility', { method: 'PUT', owner: true, body: { hidden: true } });
+    else if (kind === 'show') data = await api(base + '/visibility', { method: 'PUT', owner: true, body: { hidden: false } });
+    else if (kind === 'delete') data = await api(base, { method: 'DELETE', owner: true });
+    setBusyId('');
+
+    if (!data || !data.success) {
+      if (data && data.unauthorized) {
+        signOut('Your owner session expired. Please sign in again.');
+        return;
+      }
+      notify(data ? data.message : 'That action failed.', 'err');
+      return;
+    }
+    notify(data.message, 'ok');
+    setConfirm(null);
+    setNote('');
+    setDetail(null);
+    load(true);
+  };
+
+  const tapProps = (fn) => ({
+    role: 'button',
+    tabIndex: 0,
+    onClick: fn,
+    onKeyDown: (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        fn();
+      }
+    },
+  });
+
+  if (booting) return <Loading label="Opening master panel" />;
+  if (!owner) return <OwnerLoginPage go={go} notify={notify} onSignedIn={setOwner} />;
+
+  const counts = overview || { total: 0, pending: 0, approved: 0, rejected: 0, hidden: 0, listed: 0, bookingsToday: 0 };
+
+  const tabs = [
+    ['overview', 'Overview', 'grid'],
+    ['requests', 'Approval requests', 'shield'],
+    ['listings', 'All listings', 'building'],
+  ];
+
+  const statusMeta = (clinic) => {
+    if (clinic.status === 'pending') return ['pend', 'Pending'];
+    if (clinic.status === 'rejected') return ['rej', 'Rejected'];
+    if (clinic.hidden) return ['hid', 'Hidden'];
+    return ['appr', 'Listed'];
+  };
+
+  const jumpTo = (nextTab, nextStatus, nextVisibility) => {
+    setTab(nextTab);
+    setStatusFilter(nextStatus || 'all');
+    setVisibility(nextVisibility || 'all');
+    setSearch('');
+  };
+
+  const cards = [
+    { label: 'Pending requests', value: counts.pending, tone: 'c-amber', icon: 'clock', note: 'Waiting for your decision', go: () => jumpTo('requests') },
+    { label: 'Listed publicly', value: counts.listed, tone: 'c-green', icon: 'check', note: 'Live on the homepage', go: () => jumpTo('listings', 'approved', 'visible') },
+    { label: 'Hidden', value: counts.hidden, tone: 'c-blue', icon: 'ban', note: 'Approved but delisted', go: () => jumpTo('listings', 'approved', 'hidden') },
+    { label: 'Rejected', value: counts.rejected, tone: 'c-red', icon: 'close', note: 'Declined listings', go: () => jumpTo('listings', 'rejected') },
+    { label: 'Total clinics', value: counts.total, tone: 'c-teal', icon: 'building', note: 'Every registration', go: () => jumpTo('listings') },
+    { label: 'Bookings today', value: counts.bookingsToday, tone: 'c-violet', icon: 'users', note: 'Across all clinics', go: null },
+  ];
+
+  const actionsFor = (clinic) => {
+    const busy = busyId === clinic.clinicId;
+    const buttons = [];
+
+    if (clinic.status !== 'approved') {
+      buttons.push(
+        <button key="ap" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(clinic, 'approve')}>
+          <Icon name="check" size={15} /> Approve
+        </button>
+      );
+    }
+    if (clinic.status === 'pending') {
+      buttons.push(
+        <button
+          key="rj"
+          className="btn btn-outline btn-sm"
+          disabled={busy}
+          onClick={() => {
+            setNote('');
+            setConfirm({ kind: 'reject', clinic });
+          }}
+        >
+          <Icon name="ban" size={15} /> Reject
+        </button>
+      );
+    }
+    if (clinic.status === 'approved') {
+      buttons.push(
+        clinic.hidden ? (
+          <button key="sh" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(clinic, 'show')}>
+            <Icon name="undo" size={15} /> Unhide
+          </button>
+        ) : (
+          <button key="hd" className="btn btn-soft btn-sm" disabled={busy} onClick={() => act(clinic, 'hide')}>
+            <Icon name="ban" size={15} /> Hide
+          </button>
+        )
+      );
+    }
+
+    buttons.push(
+      <button key="ed" className="btn btn-soft btn-sm" disabled={busy} onClick={() => setFormState({ clinic })}>
+        <Icon name="settings" size={15} /> Edit
+      </button>
+    );
+    buttons.push(
+      <button key="dt" className="btn btn-ghost btn-sm" onClick={() => setDetail(clinic)}>
+        <Icon name="list" size={15} /> Details
+      </button>
+    );
+    buttons.push(
+      <button key="dl" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirm({ kind: 'delete', clinic })}>
+        <Icon name="close" size={15} /> Delete
+      </button>
+    );
+    return buttons;
+  };
+
+  const renderCard = (clinic, index) => {
+    const [tone, label] = statusMeta(clinic);
+    return (
+      <Reveal key={clinic.clinicId} delay={Math.min(index, 8) * 40}>
+        <article className={'own-card ' + tone}>
+          <div className="own-card-top">
+            <Avatar clinic={clinic} />
+            <div className="own-card-id">
+              <b title={clinic.clinicName}>{clinic.clinicName}</b>
+              <span title={clinic.doctorName}>{clinic.doctorName}</span>
+            </div>
+            <span className={'own-st ' + tone}>{label}</span>
+          </div>
+
+          <div className="own-tags">
+            <span className="badge badge-general">
+              <Icon name="stetho" size={12} /> {clinic.specialization || 'General Physician'}
+            </span>
+            <span className="badge badge-soft">
+              <Icon name="ticket" size={12} /> {clinic.appointments} total
+            </span>
+            <span className="badge badge-soft">
+              <Icon name="calendar" size={12} /> {clinic.appointmentsToday} today
+            </span>
+          </div>
+
+          <div className="own-meta">
+            <div>
+              <Icon name="pin" size={15} />
+              <span>{[clinic.address, clinic.city].filter(Boolean).join(', ') || 'No address on file'}</span>
+            </div>
+            <div>
+              <Icon name="phone" size={15} />
+              <span>{clinic.phone || 'No phone'}</span>
+            </div>
+            <div>
+              <Icon name="mail" size={15} />
+              <span>{clinic.adminEmail}</span>
+            </div>
+            <div>
+              <Icon name="user" size={15} />
+              <span>{clinic.adminUserId}</span>
+            </div>
+          </div>
+
+          <div className="own-actions">{actionsFor(clinic)}</div>
+        </article>
+      </Reveal>
+    );
+  };
+
+  const renderTable = () => (
+    <div className="table-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>Clinic</th>
+            <th>Doctor</th>
+            <th>Location</th>
+            <th>Contact</th>
+            <th>Admin</th>
+            <th>Status</th>
+            <th>Bookings</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((clinic) => {
+            const [tone, label] = statusMeta(clinic);
+            return (
+              <tr key={clinic.clinicId}>
+                <td>
+                  <b>{clinic.clinicName}</b>
+                  <span className="own-cell-sub">{clinic.specialization}</span>
+                </td>
+                <td>{clinic.doctorName}</td>
+                <td>
+                  {clinic.city || '-'}
+                  <span className="own-cell-sub">{clinic.address}</span>
+                </td>
+                <td>
+                  {clinic.phone}
+                  <span className="own-cell-sub">{clinic.adminEmail}</span>
+                </td>
+                <td>{clinic.adminUserId}</td>
+                <td>
+                  <span className={'own-st ' + tone}>{label}</span>
+                </td>
+                <td>
+                  {clinic.appointments}
+                  <span className="own-cell-sub">{clinic.appointmentsToday} today</span>
+                </td>
+                <td>
+                  <div className="own-actions" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+                    {actionsFor(clinic)}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const searchBar = (
+    <div className="own-bar">
+      <div className="input-icon">
+        <Icon name="search" size={17} />
+        <input
+          className="input"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search clinic name, doctor, email, mobile, admin user ID, address or city"
+        />
+      </div>
+
+      {tab === 'listings' ? (
+        <>
+          <select className="select" style={{ maxWidth: 170 }} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+          <select className="select" style={{ maxWidth: 170 }} value={visibility} onChange={(event) => setVisibility(event.target.value)}>
+            <option value="all">Visible and hidden</option>
+            <option value="visible">On the homepage</option>
+            <option value="hidden">Hidden only</option>
+          </select>
+        </>
+      ) : null}
+
+      <div className="own-seg">
+        <button className={view === 'cards' ? 'on' : ''} onClick={() => setView('cards')}>
+          <Icon name="grid" size={15} /> Cards
+        </button>
+        <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
+          <Icon name="list" size={15} /> List
+        </button>
+      </div>
+    </div>
+  );
+
+  const emptyState = () => {
+    if (tab === 'requests') {
+      return (
+        <div className="own-empty">
+          <Icon name="check" size={30} />
+          <b>{term ? 'No pending request matches that search' : 'No requests waiting'}</b>
+          {term ? 'Try a clinic name, doctor, email, mobile number or admin user ID.' : 'Every registration has been reviewed. New requests appear here and are emailed to you.'}
+        </div>
+      );
+    }
+    return (
+      <div className="own-empty">
+        <Icon name="building" size={30} />
+        <b>{term || statusFilter !== 'all' || visibility !== 'all' ? 'No listing matches those filters' : 'No clinics yet'}</b>
+        {term || statusFilter !== 'all' || visibility !== 'all'
+          ? 'Clear the search or filters to see everything.'
+          : 'Use Add listing to create one yourself, or wait for a clinic to register.'}
+      </div>
+    );
+  };
+
+  return (
+    <div className="adm">
+      {sidebar ? <div className="adm-scrim" onClick={() => setSidebar(false)} /> : null}
+
+      <aside className={'adm-side' + (sidebar ? ' open' : '')}>
+        <button className="brand" onClick={() => go('/')}>
+          <span className="brand-mark">
+            <Cross size={18} />
+          </span>
+          MediCare <i>Flow</i>
+        </button>
+
+        <div className="adm-clinic">
+          <div className="cc-av">
+            <Icon name="shield" size={18} />
+          </div>
+          <div>
+            <b>Master admin</b>
+            <span>{owner.ownerId}</span>
+          </div>
+        </div>
+
+        <nav className="adm-nav">
+          {tabs.map(([id, label, icon]) => (
+            <button
+              key={id}
+              className={tab === id ? 'on' : ''}
+              onClick={() => {
+                setTab(id);
+                setSidebar(false);
+              }}
+            >
+              <Icon name={icon} size={17} /> {label}
+              {id === 'requests' && counts.pending ? <span className="count">{counts.pending}</span> : null}
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              setFormState({ clinic: null });
+              setSidebar(false);
+            }}
+          >
+            <Icon name="plus" size={17} /> Add listing
+          </button>
+        </nav>
+
+        <div className="adm-side-foot">
+          <button onClick={() => go('/')}>
+            <Icon name="right" size={16} /> View public homepage
+          </button>
+          <button onClick={() => signOut('Signed out of the master panel.')}>
+            <Icon name="logout" size={16} /> Sign out
+          </button>
+        </div>
+      </aside>
+
+      <main className="adm-main">
+        <div className="adm-top">
+          <div className="row">
+            <button className="btn-icon adm-burger" onClick={() => setSidebar(true)} aria-label="Open menu">
+              <Icon name="menu" size={19} />
+            </button>
+            <div>
+              <h1>{tabs.find(([id]) => id === tab)[1]}</h1>
+              <p className="sub">
+                {tab === 'requests'
+                  ? counts.pending + ' request(s) awaiting approval'
+                  : tab === 'listings'
+                    ? rows.length + ' listing(s) shown'
+                    : 'Platform-wide listing control'}
+              </p>
+            </div>
+          </div>
+
+          <div className="adm-top-actions">
+            <button className="btn btn-soft btn-sm" onClick={() => load()}>
+              <Icon name="refresh" size={15} /> Refresh
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setFormState({ clinic: null })}>
+              <Icon name="plus" size={15} /> Add listing
+            </button>
+          </div>
+        </div>
+
+        <div className="adm-body">
+          {error ? <Alert kind="err">{error}</Alert> : null}
+
+          {tab === 'overview' ? (
+            <>
+              <div className="stat-grid">
+                {cards.map((card) => (
+                  <div
+                    key={card.label}
+                    className={'stat ' + card.tone + (card.go ? ' tap' : '')}
+                    {...(card.go ? tapProps(card.go) : {})}
+                  >
+                    <span className="stat-ico">
+                      <Icon name={card.icon} size={21} />
+                    </span>
+                    <span className="stat-txt">
+                      <small>{card.label}</small>
+                      <b>
+                        <CountUp value={card.value} />
+                      </b>
+                      <span>{card.note}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {counts.pending ? (
+                <div className="own-note">
+                  {counts.pending} clinic listing(s) are waiting for your approval. Until you approve them they stay off the
+                  public homepage and cannot take online bookings.
+                </div>
+              ) : null}
+
+              <div className="own-note" style={{ background: '#f0f9ff', borderColor: '#7dd3fc', color: '#075985' }}>
+                Hiding a listing removes it from the public homepage only. The clinic keeps working, so patients who already
+                hold a token can still track the live queue. Rejecting is the decision to keep it off the platform.
+              </div>
+            </>
+          ) : (
+            <>
+              {searchBar}
+
+              {loading ? (
+                <SkeletonCards count={6} />
+              ) : rows.length === 0 ? (
+                emptyState()
+              ) : view === 'cards' ? (
+                <div className="own-grid">{rows.map(renderCard)}</div>
+              ) : (
+                renderTable()
+              )}
+            </>
+          )}
+        </div>
+      </main>
+
+      {formState ? (
+        <ListingFormModal
+          clinic={formState.clinic}
+          close={() => setFormState(null)}
+          notify={notify}
+          onSaved={() => load(true)}
+          onExpired={() => signOut('Your owner session expired. Please sign in again.')}
+        />
+      ) : null}
+
+      {detail ? (
+        <Modal
+          title={detail.clinicName}
+          subtitle={detail.doctorName + ' - ' + detail.specialization}
+          onClose={() => setDetail(null)}
+          footer={
+            <button className="btn btn-ghost" onClick={() => setDetail(null)}>
+              Close
+            </button>
+          }
+        >
+          <dl className="kv">
+            <dt>Status</dt>
+            <dd>
+              <span className={'own-st ' + statusMeta(detail)[0]}>{statusMeta(detail)[1]}</span>
+            </dd>
+            <dt>Clinic ID</dt>
+            <dd>{detail.clinicId}</dd>
+            <dt>Address</dt>
+            <dd>{[detail.address, detail.city].filter(Boolean).join(', ') || '-'}</dd>
+            <dt>Clinic phone</dt>
+            <dd>{detail.phone || '-'}</dd>
+            <dt>Opening hours</dt>
+            <dd>{detail.timings || '-'}</dd>
+            <dt>Admin user ID</dt>
+            <dd>{detail.adminUserId}</dd>
+            <dt>Admin email</dt>
+            <dd>{detail.adminEmail}</dd>
+            <dt>Registered</dt>
+            <dd>{detail.createdAt ? fmtDate(String(detail.createdAt).slice(0, 10)) : '-'}</dd>
+            <dt>Decision</dt>
+            <dd>{detail.decidedAt ? fmtDate(String(detail.decidedAt).slice(0, 10)) + ' by ' + (detail.decidedBy || 'owner') : 'Not decided yet'}</dd>
+            {detail.rejectionNote ? (
+              <>
+                <dt>Rejection note</dt>
+                <dd>{detail.rejectionNote}</dd>
+              </>
+            ) : null}
+            <dt>Total bookings</dt>
+            <dd>
+              {detail.appointments} ({detail.appointmentsToday} today)
+            </dd>
+            <dt>About</dt>
+            <dd>{detail.about || '-'}</dd>
+          </dl>
+        </Modal>
+      ) : null}
+
+      {confirm && confirm.kind === 'reject' ? (
+        <Modal
+          title="Reject this listing request"
+          subtitle={confirm.clinic.clinicName}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger" disabled={busyId === confirm.clinic.clinicId} onClick={() => act(confirm.clinic, 'reject', note)}>
+                <Icon name="ban" size={16} /> Reject listing
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <p className="small muted">
+              The clinic keeps its admin account and can sign in, but it will not appear on the public homepage. Your reason
+              is emailed to {confirm.clinic.adminEmail}.
+            </p>
+            <div className="field">
+              <label>Reason (optional, included in the email)</label>
+              <textarea
+                className="textarea"
+                rows={3}
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="For example: the address could not be verified."
+              />
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {confirm && confirm.kind === 'delete' ? (
+        <Modal
+          title="Delete this listing permanently"
+          subtitle={confirm.clinic.clinicName}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger" disabled={busyId === confirm.clinic.clinicId} onClick={() => act(confirm.clinic, 'delete')}>
+                <Icon name="close" size={16} /> Delete everything
+              </button>
+            </>
+          }
+        >
+          <Alert kind="err">
+            This removes the clinic, its admin login, all {confirm.clinic.appointments} appointment record(s) and its queue
+            counters. It cannot be undone. To take a clinic off the homepage without losing data, use Hide instead.
+          </Alert>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
 export default function App() {
   const [route, go] = useHashRoute();
   const { items, notify, dismiss } = useToasts();
@@ -5623,6 +6732,7 @@ export default function App() {
         {route.name === 'login' ? <LoginPage go={go} notify={notify} onSession={onSession} /> : null}
         {route.name === 'forgot' ? <ForgotPage go={go} notify={notify} onSession={onSession} /> : null}
         {route.name === 'admin' ? <AdminDashboard routeClinicId={route.id} go={go} notify={notify} /> : null}
+        {route.name === 'owner' ? <OwnerPanel go={go} notify={notify} /> : null}
       </ErrorBoundary>
 
       {chrome ? <Footer go={go} /> : null}

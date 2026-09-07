@@ -76,6 +76,15 @@ const TZ = process.env.TIMEZONE || 'Asia/Kolkata';
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '';
 const KEEPALIVE_MINUTES = Number(process.env.KEEPALIVE_MINUTES || 14);
 
+/* Master admin (the platform owner). Credentials live in the environment on
+   purpose - there is no owner row in MongoDB, so no API call can ever create
+   or escalate one. OWNER_EMAIL receives every new listing request. */
+// String(), not the str() helper - that const is declared far below this line.
+const OWNER_ID = String(process.env.OWNER_ID || 'owner').trim().toLowerCase();
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+const SITE_URL = String(process.env.SITE_URL || '').trim().replace(/\/+$/, '');
+
 const BRAND = 'MediCare Flow';
 const CLEANUP_DAYS = 15; // appointments older than this are deleted nightly
 const BOOKING_DAYS = 5; // booking window = today + next 5 days
@@ -117,11 +126,21 @@ const clinicSchema = new mongoose.Schema(
     resetCodeHash: { type: String, default: '' },
     resetExpires: { type: Date, default: null },
     active: { type: Boolean, default: true },
+    /* Listing approval workflow. Registering creates a PENDING clinic; only the
+       platform owner can move it to approved, which is what puts it on the
+       public homepage. `hidden` is a separate, reversible owner switch that
+       delists an approved clinic without rejecting it. */
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
+    hidden: { type: Boolean, default: false },
+    decidedAt: { type: Date, default: null },
+    decidedBy: { type: String, default: '' },
+    rejectionNote: { type: String, default: '' },
   },
   { timestamps: true }
 );
 
 clinicSchema.index({ clinicName: 'text', doctorName: 'text', specialization: 'text', city: 'text' });
+clinicSchema.index({ status: 1, hidden: 1, createdAt: -1 });
 
 // Every original MTSS field is preserved. clinicId + source are the additions.
 const appointmentSchema = new mongoose.Schema(
@@ -210,6 +229,22 @@ async function reconcileIndexes() {
   }
 }
 
+/* Clinics that existed BEFORE the approval workflow have no `status` field, so
+   a bare schema default would silently delist every live clinic on first boot.
+   Anything already in the database is treated as previously approved. */
+async function migrateListingStatus() {
+  try {
+    const result = await Clinic.updateMany(
+      { $or: [{ status: { $exists: false } }, { status: null }, { status: '' }] },
+      { $set: { status: 'approved', hidden: false } }
+    );
+    const changed = result.modifiedCount || result.nModified || 0;
+    if (changed) console.log('[OK] Listing migration: ' + changed + ' existing clinic(s) kept approved.');
+  } catch (error) {
+    console.error('[warn] Listing migration skipped:', error.message);
+  }
+}
+
 async function connectDb(attempt = 1) {
   if (!MONGODB_URI) {
     console.error('[ERROR] MONGODB_URI is missing. Add it to Backend/.env, then restart.');
@@ -224,6 +259,7 @@ async function connectDb(attempt = 1) {
     });
     console.log('[OK] MongoDB Atlas connected -> database "' + DB_NAME + '"');
     await reconcileIndexes();
+    await migrateListingStatus();
     await runCleanup('startup');
   } catch (error) {
     console.error('[ERROR] MongoDB connection failed (attempt ' + attempt + '):', error.message);
@@ -344,7 +380,34 @@ function publicClinic(clinic) {
 
 function adminClinic(clinic) {
   const raw = clinic && clinic.toObject ? clinic.toObject() : clinic || {};
-  return Object.assign(publicClinic(raw), { adminUserId: raw.adminUserId, adminEmail: raw.adminEmail });
+  return Object.assign(publicClinic(raw), {
+    adminUserId: raw.adminUserId,
+    adminEmail: raw.adminEmail,
+    // The clinic dashboard uses these to show its own approval banner.
+    status: raw.status || 'pending',
+    hidden: Boolean(raw.hidden),
+    rejectionNote: raw.rejectionNote || '',
+  });
+}
+
+/* Two deliberately different gates:
+     directoryFilter - what the public homepage lists. Excludes hidden clinics.
+     bookableFilter  - what can still take bookings and serve a live queue.
+   Hidden clinics stay BOOKABLE on purpose, so temporarily delisting a clinic
+   never breaks a patient who already holds a token or a direct booking link. */
+const directoryFilter = () => ({ status: 'approved', hidden: false, active: true });
+const bookableFilter = () => ({ status: 'approved', active: true });
+
+function ownerClinic(clinic, counts) {
+  const raw = clinic && clinic.toObject ? clinic.toObject() : clinic || {};
+  return Object.assign(adminClinic(raw), {
+    active: raw.active !== false,
+    decidedAt: raw.decidedAt || null,
+    decidedBy: raw.decidedBy || '',
+    updatedAt: raw.updatedAt,
+    appointments: counts ? counts.total : 0,
+    appointmentsToday: counts ? counts.today : 0,
+  });
 }
 
 /* ------------------------------------------------------------- validation -- */
@@ -673,6 +736,37 @@ function clinicAuth(req, res, next) {
   }
 }
 
+/* ------------------------------------------------------------ owner auth -- */
+
+// Constant-time compare so the owner password cannot be probed byte by byte.
+function sameSecret(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function signOwnerToken() {
+  return jwt.sign({ owner: true, ownerId: OWNER_ID }, JWT_SECRET, { expiresIn: SESSION_TTL });
+}
+
+/* An owner token carries no clinicId, so it can never satisfy clinicAuth; a
+   clinic token has no owner flag, so it can never satisfy ownerAuth. The two
+   privilege levels cannot be swapped in either direction. */
+function ownerAuth(req, res, next) {
+  const raw = str(req.headers.authorization || req.headers['x-auth-token']);
+  const token = raw.replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ success: false, message: 'Please sign in to the master admin panel.' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.owner !== true) throw new Error('not an owner token');
+    req.owner = payload;
+    return next();
+  } catch (_error) {
+    return res.status(401).json({ success: false, message: 'Your owner session has expired. Please sign in again.' });
+  }
+}
+
 /* --------------------------------------------------------- public routes -- */
 
 app.get('/', (_req, res) =>
@@ -701,6 +795,8 @@ app.get('/api/health', (_req, res) =>
       : 'off',
     keepAliveTarget: keepAlive.target || null,
     lastKeepAliveAt: keepAlive.lastPingAt,
+    masterAdmin: OWNER_PASSWORD ? 'configured (id: ' + OWNER_ID + ')' : 'set OWNER_ID + OWNER_PASSWORD in .env',
+    approvalAlerts: OWNER_EMAIL ? 'to ' + maskEmail(OWNER_EMAIL) : 'set OWNER_EMAIL in .env',
   })
 );
 
@@ -873,7 +969,7 @@ app.get(
   ah(async (req, res) => {
     const search = str(req.query.search);
     const specialization = str(req.query.specialization);
-    const filter = { active: true };
+    const filter = directoryFilter();
     if (specialization && specialization !== 'All') filter.specialization = specialization;
     if (search) {
       const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
@@ -896,7 +992,7 @@ app.get(
 app.get(
   '/api/clinics/specializations',
   ah(async (_req, res) => {
-    const values = await Clinic.distinct('specialization', { active: true });
+    const values = await Clinic.distinct('specialization', directoryFilter());
     return res.json({ success: true, specializations: values.filter(Boolean).sort() });
   })
 );
@@ -904,7 +1000,7 @@ app.get(
 app.get(
   '/api/clinics/:clinicId',
   ah(async (req, res) => {
-    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId), active: true }).lean();
+    const clinic = await Clinic.findOne(Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter())).lean();
     if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
     const snapshot = await queueSnapshot([clinic.clinicId]);
     return res.json({
@@ -924,7 +1020,7 @@ app.get(
 app.get(
   '/api/clinics/:clinicId/live',
   ah(async (req, res) => {
-    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId), active: true }).lean();
+    const clinic = await Clinic.findOne(Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter())).lean();
     if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
 
     const date = str(req.query.date) || todayStr();
@@ -1050,6 +1146,97 @@ function registerOtpEmail(pending, code) {
   );
 }
 
+/* Owner-facing emails are branded for the platform, not for one clinic, so they
+   reuse the same shell() with a platform pseudo-clinic. */
+const OWNER_BRAND = {
+  clinicName: BRAND + ' - Master Admin',
+  doctorName: 'Listing approvals',
+  specialization: 'Owner console',
+  address: 'Automated owner notification',
+  phone: 'n/a',
+};
+
+function listingRequestEmail(clinic) {
+  const link = SITE_URL ? SITE_URL + '/#/owner' : 'your master admin panel';
+  return shell(
+    OWNER_BRAND,
+    `<div style="padding:30px;">
+      <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">New listing request</h3>
+      <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Approve request of <b>${esc(
+        clinic.doctorName
+      )}</b> for <b>${esc(clinic.clinicName)}</b>. The clinic is registered and email-verified, but stays off the public
+      directory until you approve it.</p>
+      <table style="width:100%;border-collapse:collapse;">
+        ${row('Clinic', esc(clinic.clinicName))}
+        ${row('Doctor', esc(clinic.doctorName), true)}
+        ${row('Specialization', esc(clinic.specialization))}
+        ${row('Address', esc([clinic.address, clinic.city].filter(Boolean).join(', ')))}
+        ${row('Clinic phone', esc(clinic.phone))}
+        ${row('Admin email', esc(clinic.adminEmail))}
+        ${row('Admin user ID', esc(clinic.adminUserId))}
+      </table>
+      <p style="margin:20px 0 0;color:#475569;font-size:13px;line-height:1.7;">Open ${esc(
+        link
+      )} and use the Approval requests section to approve or reject this listing.</p>
+    </div>`
+  );
+}
+
+function listingSubmittedEmail(clinic) {
+  return shell(
+    clinic,
+    `<div style="padding:30px;">
+      <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Listing request received</h3>
+      <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Thank you for registering <b>${esc(
+        clinic.clinicName
+      )}</b> on ${esc(BRAND)}. Your admin account is ready, but the public listing is held for a short review.</p>
+      <table style="width:100%;border-collapse:collapse;">
+        ${row('Clinic', esc(clinic.clinicName))}
+        ${row('Doctor', esc(clinic.doctorName))}
+        ${row('Admin user ID', esc(clinic.adminUserId), true)}
+        ${row('Status', 'Awaiting approval')}
+      </table>
+      <p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.7;">You can sign in to your dashboard right
+      now and get set up. The moment we approve the listing, your clinic appears on the ${esc(
+        BRAND
+      )} homepage and starts accepting online bookings - we will email you straight away.</p>
+    </div>`
+  );
+}
+
+function listingRejectedEmail(clinic, note) {
+  return shell(
+    clinic,
+    `<div style="padding:30px;">
+      <h3 style="margin:0 0 6px;color:#b45309;font-size:19px;">Listing request not approved</h3>
+      <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">We were unable to approve the public
+      listing for <b>${esc(clinic.clinicName)}</b> at this time.</p>
+      ${
+        str(note)
+          ? `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:16px;margin-bottom:18px;">
+               <p style="margin:0 0 6px;color:#92400e;font-size:12px;letter-spacing:1px;">REASON</p>
+               <p style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${esc(note)}</p>
+             </div>`
+          : ''
+      }
+      <p style="margin:0;color:#475569;font-size:13px;line-height:1.7;">Your admin account still works, so you can sign
+      in, correct your details and reply to this address to ask for another review.</p>
+    </div>`
+  );
+}
+
+function notifyOwnerOfRequest(clinic) {
+  if (!OWNER_EMAIL) {
+    console.warn('[warn] OWNER_EMAIL is not set - no approval alert sent for ' + clinic.clinicName + '.');
+    return;
+  }
+  sendEmail({
+    to: OWNER_EMAIL,
+    subject: 'Approve request of ' + clinic.doctorName + ' (' + clinic.clinicName + ')',
+    html: listingRequestEmail(clinic),
+  }).catch(() => {});
+}
+
 app.post(
   '/api/auth/register/send-otp',
   ah(async (req, res) => {
@@ -1146,15 +1333,18 @@ app.post(
       passwordHash: await bcrypt.hash(str(body.password), BCRYPT_ROUNDS),
     });
 
+    // The clinic is created as PENDING (schema default) - not listed yet.
     sendEmail({
       to: clinic.adminEmail,
-      subject: 'Your clinic is live on ' + BRAND,
-      html: welcomeEmail(clinic),
+      subject: 'Listing request received - ' + BRAND,
+      html: listingSubmittedEmail(clinic),
     }).catch(() => {});
+
+    notifyOwnerOfRequest(clinic);
 
     return res.status(201).json({
       success: true,
-      message: clinic.clinicName + ' is registered and listed publicly.',
+      message: clinic.clinicName + ' is registered. Your listing is now awaiting owner approval.',
       token: signToken(clinic),
       clinic: adminClinic(clinic),
     });
@@ -1324,7 +1514,7 @@ app.post(
     const clinicId = str(body.clinicId);
     const form = body.form || body.formData || {};
 
-    const clinic = await Clinic.findOne({ clinicId, active: true });
+    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
     if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
 
     const problem = validateAppointmentForm(form);
@@ -1394,7 +1584,7 @@ app.post(
       return res.status(400).json({ success: false, message: 'Incorrect OTP. ' + (5 - pending.attempts) + ' attempt(s) left.' });
     }
 
-    const clinic = await Clinic.findOne({ clinicId, active: true });
+    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
     if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
 
     otpStore.delete(key);
@@ -1771,6 +1961,343 @@ cron.schedule('0 0 * * *', () => runCleanup('nightly cron'), { timezone: TZ });
 
 /* ------------------------------------------------------- error handling -- */
 
+/* ----------------------------------------------------- master admin panel -- */
+/* Everything below is owner-only. These routes are the ONLY place a listing can
+   change approval state or visibility, and every one of them sits behind
+   ownerAuth. Note that clinicId is never editable: it is the tenant key stamped
+   on every appointment, so renaming it would orphan a the entire history of a clinic. */
+
+app.post(
+  '/api/owner/login',
+  ah(async (req, res) => {
+    if (!OWNER_PASSWORD) {
+      return res.status(503).json({
+        success: false,
+        message: 'Master admin is not configured. Add OWNER_ID, OWNER_PASSWORD and OWNER_EMAIL to Backend/.env, then restart the server.',
+      });
+    }
+    const userId = str((req.body || {}).userId).toLowerCase();
+    const password = str((req.body || {}).password);
+    if (!userId || !password) return res.status(400).json({ success: false, message: 'Enter your owner ID and password.' });
+
+    const ok = userId === OWNER_ID && sameSecret(password, OWNER_PASSWORD);
+    if (!ok) return res.status(401).json({ success: false, message: 'Incorrect owner ID or password.' });
+
+    return res.json({
+      success: true,
+      message: 'Welcome back.',
+      token: signOwnerToken(),
+      owner: { ownerId: OWNER_ID, email: OWNER_EMAIL },
+    });
+  })
+);
+
+app.get('/api/owner/me', ownerAuth, (req, res) =>
+  res.json({ success: true, owner: { ownerId: req.owner.ownerId, email: OWNER_EMAIL, notifications: Boolean(OWNER_EMAIL) } })
+);
+
+app.get(
+  '/api/owner/overview',
+  ownerAuth,
+  ah(async (_req, res) => {
+    const today = todayStr();
+    const [total, pending, approved, rejected, hidden, listed, bookingsToday] = await Promise.all([
+      Clinic.countDocuments({}),
+      Clinic.countDocuments({ status: 'pending' }),
+      Clinic.countDocuments({ status: 'approved' }),
+      Clinic.countDocuments({ status: 'rejected' }),
+      Clinic.countDocuments({ status: 'approved', hidden: true }),
+      Clinic.countDocuments(directoryFilter()),
+      Appointment.countDocuments({ date: today, status: { $ne: 'cancelled' } }),
+    ]);
+    return res.json({
+      success: true,
+      today,
+      dateLabel: dateLabel(today),
+      counts: { total, pending, approved, rejected, hidden, listed, bookingsToday },
+    });
+  })
+);
+
+/* One search box covers clinic/hospital name, doctor, specialization, address,
+   city, mobile number, admin email, admin user ID and the clinic slug. */
+function ownerSearchFilter(query) {
+  const search = str(query.search);
+  const status = str(query.status);
+  const visibility = str(query.visibility);
+  const filter = {};
+  if (status && status !== 'all') filter.status = status;
+  if (visibility === 'hidden') filter.hidden = true;
+  if (visibility === 'visible') filter.hidden = false;
+  if (search) {
+    const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    filter.$or = [
+      { clinicName: rx },
+      { doctorName: rx },
+      { specialization: rx },
+      { address: rx },
+      { city: rx },
+      { phone: rx },
+      { adminEmail: rx },
+      { adminUserId: rx },
+      { clinicId: rx },
+    ];
+  }
+  return filter;
+}
+
+// Pending first, then newest, so the approval queue reads top-down.
+async function listOwnerClinics(filter, limit = 300) {
+  const order = { pending: 0, approved: 1, rejected: 2 };
+  const clinics = await Clinic.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  if (!clinics.length) return [];
+
+  const ids = clinics.map((c) => c.clinicId);
+  const today = todayStr();
+  const [totals, todays] = await Promise.all([
+    Appointment.aggregate([{ $match: { clinicId: { $in: ids } } }, { $group: { _id: '$clinicId', n: { $sum: 1 } } }]),
+    Appointment.aggregate([
+      { $match: { clinicId: { $in: ids }, date: today, status: { $ne: 'cancelled' } } },
+      { $group: { _id: '$clinicId', n: { $sum: 1 } } },
+    ]),
+  ]);
+  const totalBy = {};
+  const todayBy = {};
+  for (const r of totals) totalBy[r._id] = r.n;
+  for (const r of todays) todayBy[r._id] = r.n;
+
+  return clinics
+    .map((c) => ownerClinic(c, { total: totalBy[c.clinicId] || 0, today: todayBy[c.clinicId] || 0 }))
+    .sort((a, b) => {
+      const rank = (order[a.status] === undefined ? 3 : order[a.status]) - (order[b.status] === undefined ? 3 : order[b.status]);
+      if (rank !== 0) return rank;
+      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    });
+}
+
+app.get(
+  '/api/owner/clinics',
+  ownerAuth,
+  ah(async (req, res) => {
+    const clinics = await listOwnerClinics(ownerSearchFilter(req.query || {}));
+    return res.json({ success: true, count: clinics.length, clinics });
+  })
+);
+
+// The approval queue: pending listings only, with its own search.
+app.get(
+  '/api/owner/requests',
+  ownerAuth,
+  ah(async (req, res) => {
+    const filter = ownerSearchFilter(Object.assign({}, req.query || {}, { status: 'pending', visibility: 'all' }));
+    const clinics = await listOwnerClinics(filter);
+    return res.json({ success: true, count: clinics.length, clinics });
+  })
+);
+
+app.put(
+  '/api/owner/clinics/:clinicId/approve',
+  ownerAuth,
+  ah(async (req, res) => {
+    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
+    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+    if (clinic.status === 'approved') {
+      return res.json({ success: true, message: clinic.clinicName + ' is already approved.', clinic: ownerClinic(clinic) });
+    }
+
+    clinic.status = 'approved';
+    clinic.hidden = false;
+    clinic.decidedAt = new Date();
+    clinic.decidedBy = OWNER_ID;
+    clinic.rejectionNote = '';
+    await clinic.save();
+
+    // welcomeEmail() already reads "your clinic is live" - exactly right here.
+    sendEmail({ to: clinic.adminEmail, subject: 'Your clinic is live on ' + BRAND, html: welcomeEmail(clinic) }).catch(() => {});
+
+    return res.json({
+      success: true,
+      message: clinic.clinicName + ' is approved and now listed publicly.',
+      clinic: ownerClinic(clinic),
+    });
+  })
+);
+
+app.put(
+  '/api/owner/clinics/:clinicId/reject',
+  ownerAuth,
+  ah(async (req, res) => {
+    const note = str((req.body || {}).note);
+    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
+    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+
+    clinic.status = 'rejected';
+    clinic.hidden = false;
+    clinic.decidedAt = new Date();
+    clinic.decidedBy = OWNER_ID;
+    clinic.rejectionNote = note;
+    await clinic.save();
+
+    sendEmail({
+      to: clinic.adminEmail,
+      subject: 'Update on your ' + BRAND + ' listing request',
+      html: listingRejectedEmail(clinic, note),
+    }).catch(() => {});
+
+    return res.json({ success: true, message: clinic.clinicName + ' was rejected.', clinic: ownerClinic(clinic) });
+  })
+);
+
+/* Hide / unhide only affects the public directory. The clinic keeps working, so
+   patients holding a token can still track it. */
+app.put(
+  '/api/owner/clinics/:clinicId/visibility',
+  ownerAuth,
+  ah(async (req, res) => {
+    const hidden = Boolean((req.body || {}).hidden);
+    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
+    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+    if (clinic.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Only approved listings can be hidden or unhidden.' });
+    }
+
+    clinic.hidden = hidden;
+    await clinic.save();
+
+    return res.json({
+      success: true,
+      message: clinic.clinicName + (hidden ? ' is hidden from the homepage.' : ' is back on the homepage.'),
+      clinic: ownerClinic(clinic),
+    });
+  })
+);
+
+// Owner-created listings skip the approval queue - the owner IS the approver.
+app.post(
+  '/api/owner/clinics',
+  ownerAuth,
+  ah(async (req, res) => {
+    const body = req.body || {};
+    const problem = validateRegistration(body);
+    if (problem) return res.status(400).json({ success: false, message: problem });
+
+    const adminUserId = str(body.adminUserId).toLowerCase();
+    if (await Clinic.exists({ adminUserId })) {
+      return res.status(409).json({ success: false, message: 'That admin user ID is already taken. Please choose another.' });
+    }
+
+    let clinicId = slugify(body.clinicName) || 'clinic';
+    if (await Clinic.exists({ clinicId })) clinicId = clinicId + '-' + crypto.randomBytes(2).toString('hex');
+
+    const clinic = await Clinic.create({
+      clinicId,
+      clinicName: str(body.clinicName),
+      doctorName: str(body.doctorName),
+      specialization: str(body.specialization),
+      address: str(body.address),
+      city: str(body.city),
+      phone: str(body.phone),
+      photo: str(body.photo),
+      about: str(body.about),
+      timings: str(body.timings),
+      adminUserId,
+      adminEmail: str(body.adminEmail).toLowerCase(),
+      passwordHash: await bcrypt.hash(str(body.password), BCRYPT_ROUNDS),
+      status: 'approved',
+      hidden: false,
+      decidedAt: new Date(),
+      decidedBy: OWNER_ID,
+    });
+
+    sendEmail({ to: clinic.adminEmail, subject: 'Your clinic is live on ' + BRAND, html: welcomeEmail(clinic) }).catch(() => {});
+
+    return res.status(201).json({
+      success: true,
+      message: clinic.clinicName + ' was added and listed publicly.',
+      clinic: ownerClinic(clinic),
+    });
+  })
+);
+
+app.put(
+  '/api/owner/clinics/:clinicId',
+  ownerAuth,
+  ah(async (req, res) => {
+    const body = req.body || {};
+    const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
+    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+
+    for (const field of ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'photo', 'about', 'timings']) {
+      if (body[field] !== undefined) clinic[field] = str(body[field]);
+    }
+
+    if (body.phone !== undefined) {
+      const phone = str(body.phone);
+      if (!/^\d{10}$/.test(phone)) return res.status(400).json({ success: false, message: 'Clinic phone number must be exactly 10 digits.' });
+      clinic.phone = phone;
+    }
+
+    if (body.adminEmail !== undefined) {
+      const email = str(body.adminEmail).toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ success: false, message: 'Please enter a valid admin email address.' });
+      }
+      clinic.adminEmail = email;
+    }
+
+    if (body.adminUserId !== undefined) {
+      const wanted = str(body.adminUserId).toLowerCase();
+      if (!/^[a-zA-Z0-9_.]{4,24}$/.test(wanted)) {
+        return res.status(400).json({ success: false, message: 'Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).' });
+      }
+      if (wanted !== clinic.adminUserId && (await Clinic.exists({ adminUserId: wanted }))) {
+        return res.status(409).json({ success: false, message: 'That admin user ID is already taken.' });
+      }
+      clinic.adminUserId = wanted;
+    }
+
+    // Only reset the password when a new one is actually supplied.
+    if (str(body.password)) {
+      if (str(body.password).length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+      }
+      clinic.passwordHash = await bcrypt.hash(str(body.password), BCRYPT_ROUNDS);
+    }
+
+    if (body.active !== undefined) clinic.active = Boolean(body.active);
+
+    if (!str(clinic.clinicName) || !str(clinic.doctorName) || !str(clinic.address)) {
+      return res.status(400).json({ success: false, message: 'Clinic name, doctor name and address cannot be empty.' });
+    }
+
+    await clinic.save();
+    return res.json({ success: true, message: clinic.clinicName + ' was updated.', clinic: ownerClinic(clinic) });
+  })
+);
+
+/* Deleting a listing removes its appointments and queue counters too - leaving
+   them behind would keep consuming token numbers for a clinic that is gone. */
+app.delete(
+  '/api/owner/clinics/:clinicId',
+  ownerAuth,
+  ah(async (req, res) => {
+    const clinicId = str(req.params.clinicId);
+    const clinic = await Clinic.findOne({ clinicId });
+    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+
+    const appointments = await Appointment.countDocuments({ clinicId });
+    await Appointment.deleteMany({ clinicId });
+    await QueueToken.deleteMany({ clinicId });
+    await Clinic.deleteOne({ clinicId });
+
+    return res.json({
+      success: true,
+      message: clinic.clinicName + ' and ' + appointments + ' appointment record(s) were deleted.',
+      deleted: { clinicId, clinicName: clinic.clinicName, appointments },
+    });
+  })
+);
+
 app.use('/api', (req, res) =>
   res.status(404).json({ success: false, message: 'No API route matches ' + req.method + ' ' + req.originalUrl })
 );
@@ -1928,6 +2455,13 @@ server.listen(PORT, () => {
   console.log('  Timezone    ' + TZ + '  (today = ' + todayStr() + ')');
   console.log('  Cleanup     appointments older than ' + CLEANUP_DAYS + ' days, daily at midnight');
   console.log('  Booking     today + next ' + BOOKING_DAYS + ' days');
+  console.log(
+    '  Owner      ' +
+      (OWNER_PASSWORD
+        ? 'master panel at /#/owner  (id: ' + OWNER_ID + ')'
+        : 'DISABLED - set OWNER_ID + OWNER_PASSWORD + OWNER_EMAIL in .env')
+  );
+  console.log('  Approvals   ' + (OWNER_EMAIL ? 'alerts email ' + OWNER_EMAIL : 'no OWNER_EMAIL - approval alerts disabled'));
   console.log(
     '  Keep-alive  ' +
       (keepAlive.enabled
