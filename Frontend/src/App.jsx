@@ -19,59 +19,69 @@
  * This file is 100% ASCII on purpose, so no editor encoding can corrupt it.
  * ========================================================================== */
 
-import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 /* ------------------------------------------------------------- constants -- */
 
 const API =
-  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:5000/api';
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_URL) ||
+  "http://localhost:5000/api";
 
-const BRAND = 'MediCare Flow';
-const TOKEN_KEY = 'mcf_token';
-const CLINIC_KEY = 'mcf_clinic';
+const BRAND = "MediCare Flow";
+const TOKEN_KEY = "mcf_token";
+const CLINIC_KEY = "mcf_clinic";
 
-const STEPS = ['Details', 'Verify OTP', 'Confirmed'];
+const STEPS = ["Details", "Verify OTP", "Confirmed"];
 
 const EMPTY_FORM = {
-  quota: 'General',
-  name: '',
-  gender: '',
-  age: '',
-  weight: '',
-  date: '',
-  mobile: '',
-  email: '',
-  address: '',
+  quota: "General",
+  name: "",
+  gender: "",
+  age: "",
+  weight: "",
+  date: "",
+  mobile: "",
+  email: "",
+  address: "",
 };
 
 const SPECIALIZATIONS = [
-  'General Physician',
-  'Multi-specialty',
-  'Cardiology',
-  'Dentistry',
-  'Dermatology',
-  'Diabetology',
-  'ENT',
-  'Eye Care',
-  'Gastroenterology',
-  'Gynaecology',
-  'Neurology',
-  'Oncology',
-  'Orthopaedics',
-  'Paediatrics',
-  'Physiotherapy',
-  'Psychiatry',
-  'Pulmonology',
-  'Urology',
+  "General Physician",
+  "Multi-specialty",
+  "Cardiology",
+  "Dentistry",
+  "Dermatology",
+  "Diabetology",
+  "ENT",
+  "Eye Care",
+  "Gastroenterology",
+  "Gynaecology",
+  "Neurology",
+  "Oncology",
+  "Orthopaedics",
+  "Paediatrics",
+  "Physiotherapy",
+  "Psychiatry",
+  "Pulmonology",
+  "Urology",
 ];
 
 /* --------------------------------------------------------------- storage -- */
 
 const getToken = () => {
   try {
-    return window.localStorage.getItem(TOKEN_KEY) || '';
+    return window.localStorage.getItem(TOKEN_KEY) || "";
   } catch (_e) {
-    return '';
+    return "";
   }
 };
 
@@ -86,7 +96,7 @@ const setToken = (value) => {
 
 const getStoredClinic = () => {
   try {
-    return JSON.parse(window.localStorage.getItem(CLINIC_KEY) || 'null');
+    return JSON.parse(window.localStorage.getItem(CLINIC_KEY) || "null");
   } catch (_e) {
     return null;
   }
@@ -104,14 +114,14 @@ const setStoredClinic = (clinic) => {
 /* The owner session is stored under its OWN keys. Keeping it separate from the
    clinic session means signing out of one never touches the other, and a
    clinic token can never be sent to an owner-only route by accident. */
-const OWNER_TOKEN_KEY = 'mcf_owner_token';
-const OWNER_KEY = 'mcf_owner';
+const OWNER_TOKEN_KEY = "mcf_owner_token";
+const OWNER_KEY = "mcf_owner";
 
 const getOwnerToken = () => {
   try {
-    return window.localStorage.getItem(OWNER_TOKEN_KEY) || '';
+    return window.localStorage.getItem(OWNER_TOKEN_KEY) || "";
   } catch (_error) {
-    return '';
+    return "";
   }
 };
 
@@ -126,7 +136,7 @@ const setOwnerToken = (value) => {
 
 const getStoredOwner = () => {
   try {
-    return JSON.parse(window.localStorage.getItem(OWNER_KEY) || 'null');
+    return JSON.parse(window.localStorage.getItem(OWNER_KEY) || "null");
   } catch (_error) {
     return null;
   }
@@ -149,11 +159,12 @@ const MAX_PHOTO_EDGE = 900;
 function readAsImage(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('That file could not be read.'));
+    reader.onerror = () => reject(new Error("That file could not be read."));
     reader.onload = () => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('That file is not a readable image.'));
+      img.onerror = () =>
+        reject(new Error("That file is not a readable image."));
       img.src = reader.result;
     };
     reader.readAsDataURL(file);
@@ -161,7 +172,9 @@ function readAsImage(file) {
 }
 
 function canvasToBlob(canvas, quality) {
-  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality));
+  return new Promise((resolve) =>
+    canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality),
+  );
 }
 
 /* Shrinks a picture in the BROWSER before it is uploaded. This matters: a photo
@@ -171,19 +184,23 @@ function canvasToBlob(canvas, quality) {
 async function fitImageFile(file) {
   const supported = /^image\/(jpeg|png|webp|gif)$/.test(file.type);
   if (supported && file.size <= MAX_UPLOAD_BYTES) return file;
-  if (file.type === 'image/gif') throw new Error('That GIF is over 900 KB. Please choose a smaller one.');
+  if (file.type === "image/gif")
+    throw new Error("That GIF is over 900 KB. Please choose a smaller one.");
 
   const img = await readAsImage(file);
   const longest = Math.max(img.width || 1, img.height || 1);
   const scale = Math.min(1, MAX_PHOTO_EDGE / longest);
   const width = Math.max(1, Math.round((img.width || MAX_PHOTO_EDGE) * scale));
-  const height = Math.max(1, Math.round((img.height || MAX_PHOTO_EDGE) * scale));
+  const height = Math.max(
+    1,
+    Math.round((img.height || MAX_PHOTO_EDGE) * scale),
+  );
 
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff'; // flatten transparency, JPEG has no alpha channel
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff"; // flatten transparency, JPEG has no alpha channel
   ctx.fillRect(0, 0, width, height);
   ctx.drawImage(img, 0, 0, width, height);
 
@@ -193,7 +210,7 @@ async function fitImageFile(file) {
     quality -= 0.12;
     blob = await canvasToBlob(canvas, quality);
   }
-  if (!blob) throw new Error('That image could not be converted.');
+  if (!blob) throw new Error("That image could not be converted.");
   return blob;
 }
 
@@ -201,18 +218,24 @@ async function fitImageFile(file) {
    Cloudflare R2 and hands back the URL that gets saved in MongoDB. */
 async function uploadImage(blob) {
   try {
-    const response = await fetch(API + '/upload/clinic-photo', {
-      method: 'POST',
-      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+    const response = await fetch(API + "/upload/clinic-photo", {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "application/octet-stream" },
       body: blob,
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success) {
-      return { success: false, message: data.message || 'The upload failed (' + response.status + ').' };
+      return {
+        success: false,
+        message: data.message || "The upload failed (" + response.status + ").",
+      };
     }
     return data;
   } catch (_error) {
-    return { success: false, message: 'Could not reach the server to upload that photo.' };
+    return {
+      success: false,
+      message: "Could not reach the server to upload that photo.",
+    };
   }
 }
 
@@ -246,16 +269,49 @@ function qrMul(a, b) {
    capacity is derived, never hardcoded: total codewords come from counting the
    free modules in the symbol, so the two can never drift apart. */
 var QR_H = [
-  [17, 1], [28, 1], [22, 2], [16, 4], [22, 4], [28, 4], [26, 5], [26, 6],
-  [24, 8], [28, 8], [24, 11], [28, 11], [22, 16], [24, 16], [24, 18],
-  [30, 16], [28, 19], [28, 21], [26, 25], [28, 25]
+  [17, 1],
+  [28, 1],
+  [22, 2],
+  [16, 4],
+  [22, 4],
+  [28, 4],
+  [26, 5],
+  [26, 6],
+  [24, 8],
+  [28, 8],
+  [24, 11],
+  [28, 11],
+  [22, 16],
+  [24, 16],
+  [24, 18],
+  [30, 16],
+  [28, 19],
+  [28, 21],
+  [26, 25],
+  [28, 25],
 ];
 
 var QR_ALIGN = [
-  [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42],
-  [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62],
-  [6, 26, 46, 66], [6, 26, 48, 70], [6, 26, 50, 74], [6, 30, 54, 78],
-  [6, 30, 56, 82], [6, 30, 58, 86], [6, 34, 62, 90]
+  [],
+  [6, 18],
+  [6, 22],
+  [6, 26],
+  [6, 30],
+  [6, 34],
+  [6, 22, 38],
+  [6, 24, 42],
+  [6, 26, 46],
+  [6, 28, 50],
+  [6, 30, 54],
+  [6, 32, 58],
+  [6, 34, 62],
+  [6, 26, 46, 66],
+  [6, 26, 48, 70],
+  [6, 26, 50, 74],
+  [6, 30, 54, 78],
+  [6, 30, 56, 82],
+  [6, 30, 58, 86],
+  [6, 34, 62, 90],
 ];
 
 function qrGrid(size, value) {
@@ -297,7 +353,9 @@ function qrReserved(version) {
       var r = centers[a];
       var c = centers[b];
       var nearFinder =
-        (r <= 8 && c <= 8) || (r <= 8 && c >= size - 9) || (r >= size - 9 && c <= 8);
+        (r <= 8 && c <= 8) ||
+        (r <= 8 && c >= size - 9) ||
+        (r >= size - 9 && c <= 8);
       if (nearFinder) continue;
       block(r - 2, c - 2, 5, 5);
     }
@@ -334,7 +392,7 @@ function qrBlockPlan(version) {
     dataTotal: dataTotal,
     shortLen: shortLen,
     shortCount: blocks - longCount,
-    longCount: longCount
+    longCount: longCount,
   };
 }
 
@@ -377,16 +435,21 @@ function qrUtf8Bytes(text) {
     } else if (code < 0x800) {
       out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
     } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
-      var pair = 0x10000 + ((code - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
+      var pair =
+        0x10000 + ((code - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
       i++;
       out.push(
         0xf0 | (pair >> 18),
         0x80 | ((pair >> 12) & 0x3f),
         0x80 | ((pair >> 6) & 0x3f),
-        0x80 | (pair & 0x3f)
+        0x80 | (pair & 0x3f),
       );
     } else {
-      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+      out.push(
+        0xe0 | (code >> 12),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      );
     }
   }
   return out;
@@ -470,14 +533,22 @@ function qrVersionBits(version) {
 
 function qrMaskBit(mask, i, j) {
   switch (mask) {
-    case 0: return (i + j) % 2 === 0;
-    case 1: return i % 2 === 0;
-    case 2: return j % 3 === 0;
-    case 3: return (i + j) % 3 === 0;
-    case 4: return (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0;
-    case 5: return ((i * j) % 2) + ((i * j) % 3) === 0;
-    case 6: return (((i * j) % 2) + ((i * j) % 3)) % 2 === 0;
-    default: return ((((i + j) % 2) + ((i * j) % 3)) % 2) === 0;
+    case 0:
+      return (i + j) % 2 === 0;
+    case 1:
+      return i % 2 === 0;
+    case 2:
+      return j % 3 === 0;
+    case 3:
+      return (i + j) % 3 === 0;
+    case 4:
+      return (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0;
+    case 5:
+      return ((i * j) % 2) + ((i * j) % 3) === 0;
+    case 6:
+      return (((i * j) % 2) + ((i * j) % 3)) % 2 === 0;
+    default:
+      return (((i + j) % 2) + ((i * j) % 3)) % 2 === 0;
   }
 }
 
@@ -509,7 +580,9 @@ function qrDrawFunctions(mod, version) {
       var r = centers[a];
       var c = centers[b];
       var nearFinder =
-        (r <= 8 && c <= 8) || (r <= 8 && c >= size - 9) || (r >= size - 9 && c <= 8);
+        (r <= 8 && c <= 8) ||
+        (r <= 8 && c >= size - 9) ||
+        (r >= size - 9 && c <= 8);
       if (nearFinder) continue;
       for (var i2 = -2; i2 <= 2; i2++) {
         for (var j2 = -2; j2 <= 2; j2++) {
@@ -564,9 +637,9 @@ function qrPenalty(mod, size) {
       }
     }
     if (run >= 5) total += 3 + (run - 5);
-    var text = seq.join('');
-    var pat1 = '10111010000';
-    var pat2 = '00001011101';
+    var text = seq.join("");
+    var pat1 = "10111010000";
+    var pat2 = "00001011101";
     var from = 0;
     while (true) {
       var hit = text.indexOf(pat1, from);
@@ -596,7 +669,8 @@ function qrPenalty(mod, size) {
   for (var y = 0; y < size - 1; y++) {
     for (var x = 0; x < size - 1; x++) {
       var v = mod[y][x];
-      if (v === mod[y][x + 1] && v === mod[y + 1][x] && v === mod[y + 1][x + 1]) score += 3;
+      if (v === mod[y][x + 1] && v === mod[y + 1][x] && v === mod[y + 1][x + 1])
+        score += 3;
     }
   }
   var ratio = (dark * 100) / (size * size);
@@ -645,20 +719,30 @@ function qrMatrix(text) {
     var built = qrBuild(version, codewords, mask);
     var score = qrPenalty(built.modules, built.size);
     if (!best || score < best.score) {
-      best = { score: score, mask: mask, size: built.size, modules: built.modules };
+      best = {
+        score: score,
+        mask: mask,
+        size: built.size,
+        modules: built.modules,
+      };
     }
   }
-  return { size: best.size, modules: best.modules, version: version, mask: best.mask };
+  return {
+    size: best.size,
+    modules: best.modules,
+    version: version,
+    mask: best.mask,
+  };
 }
 
 /* ------------------------------------------------------------ api client -- */
 
 async function api(path, options = {}) {
-  const { method = 'GET', body, auth = false, owner = false } = options;
-  const headers = { 'Content-Type': 'application/json' };
+  const { method = "GET", body, auth = false, owner = false } = options;
+  const headers = { "Content-Type": "application/json" };
   // owner beats auth: the two sessions are never mixed on one request.
-  if (owner) headers.Authorization = 'Bearer ' + getOwnerToken();
-  else if (auth) headers.Authorization = 'Bearer ' + getToken();
+  if (owner) headers.Authorization = "Bearer " + getOwnerToken();
+  else if (auth) headers.Authorization = "Bearer " + getToken();
 
   let response;
   try {
@@ -670,7 +754,10 @@ async function api(path, options = {}) {
   } catch (_networkError) {
     return {
       success: false,
-      message: 'Cannot reach the API at ' + API + '. Start the backend (node Server.js) and check the port.',
+      message:
+        "Cannot reach the API at " +
+        API +
+        ". Start the backend (node Server.js) and check the port.",
     };
   }
 
@@ -681,7 +768,10 @@ async function api(path, options = {}) {
   } catch (_parseError) {
     return {
       success: false,
-      message: 'The API returned a non-JSON response (HTTP ' + response.status + '). Is VITE_API_URL pointing at the backend?',
+      message:
+        "The API returned a non-JSON response (HTTP " +
+        response.status +
+        "). Is VITE_API_URL pointing at the backend?",
     };
   }
 
@@ -690,7 +780,7 @@ async function api(path, options = {}) {
       success: false,
       status: response.status,
       unauthorized: response.status === 401,
-      message: data.message || 'Request failed (HTTP ' + response.status + ').',
+      message: data.message || "Request failed (HTTP " + response.status + ").",
     };
   }
   return data;
@@ -708,17 +798,18 @@ async function api(path, options = {}) {
  * screen keeps its polling timer and nothing breaks.
  * ========================================================================== */
 
-const API_ORIGIN = API.replace(/\/api\/?$/, '');
+const API_ORIGIN = API.replace(/\/api\/?$/, "");
 
 let socketScript = null;
 
 function loadSocketIo() {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return Promise.resolve(null);
+  if (typeof window === "undefined" || typeof document === "undefined")
+    return Promise.resolve(null);
   if (window.io) return Promise.resolve(window.io);
   if (socketScript) return socketScript;
   socketScript = new Promise((resolve) => {
-    const tag = document.createElement('script');
-    tag.src = API_ORIGIN + '/socket.io/socket.io.js';
+    const tag = document.createElement("script");
+    tag.src = API_ORIGIN + "/socket.io/socket.io.js";
     tag.async = true;
     tag.onload = () => resolve(window.io || null);
     tag.onerror = () => resolve(null);
@@ -744,18 +835,18 @@ function useQueueSocket(clinicId, date, onUpdate) {
     loadSocketIo().then((factory) => {
       if (cancelled || !factory) return;
       socket = factory(API_ORIGIN, {
-        transports: ['websocket', 'polling'],
+        transports: ["websocket", "polling"],
         reconnectionDelay: 1200,
         reconnectionDelayMax: 6000,
         timeout: 8000,
       });
-      socket.on('connect', () => {
+      socket.on("connect", () => {
         setConnected(true);
-        socket.emit('queue:join', { clinicId, date: date || '' });
+        socket.emit("queue:join", { clinicId, date: date || "" });
       });
-      socket.on('disconnect', () => setConnected(false));
-      socket.on('connect_error', () => setConnected(false));
-      socket.on('queue:update', (payload) => {
+      socket.on("disconnect", () => setConnected(false));
+      socket.on("connect_error", () => setConnected(false));
+      socket.on("queue:update", (payload) => {
         if (handler.current) handler.current(payload);
       });
     });
@@ -764,8 +855,8 @@ function useQueueSocket(clinicId, date, onUpdate) {
       cancelled = true;
       setConnected(false);
       if (socket) {
-        socket.off('queue:update');
-        socket.emit('queue:leave');
+        socket.off("queue:update");
+        socket.emit("queue:leave");
         socket.disconnect();
       }
     };
@@ -783,35 +874,46 @@ const todayISO = () => {
 };
 
 const fmtDate = (value) => {
-  if (!value) return '-';
-  const [y, m, d] = String(value).split('-').map(Number);
+  if (!value) return "-";
+  const [y, m, d] = String(value).split("-").map(Number);
   if (!y || !m || !d) return String(value);
   const dt = new Date(Date.UTC(y, m - 1, d, 12));
-  return dt.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+  return dt.toLocaleDateString("en-IN", {
+    timeZone: "UTC",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 };
 
 const fmtLongDate = (value) => {
-  if (!value) return '-';
-  const [y, m, d] = String(value).split('-').map(Number);
+  if (!value) return "-";
+  const [y, m, d] = String(value).split("-").map(Number);
   if (!y || !m || !d) return String(value);
   const dt = new Date(Date.UTC(y, m - 1, d, 12));
-  return dt.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return dt.toLocaleDateString("en-IN", {
+    timeZone: "UTC",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 };
 
-const initials = (value = '') =>
+const initials = (value = "") =>
   String(value)
-    .split(' ')
+    .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .map((word) => word[0])
-    .join('')
-    .toUpperCase() || 'C';
+    .join("")
+    .toUpperCase() || "C";
 
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 /* ----------------------------------------------------------------- icons -- */
 
-function Icon({ name, size = 18, className = '' }) {
+function Icon({ name, size = 18, className = "" }) {
   const shapes = {
     search: (
       <>
@@ -882,7 +984,9 @@ function Icon({ name, size = 18, className = '' }) {
         <circle cx="12" cy="10" r="2.6" />
       </>
     ),
-    phone: <path d="M5 4h3.5l1.6 4-2 1.4a12 12 0 005.5 5.5l1.4-2 4 1.6V19a1.5 1.5 0 01-1.7 1.5A16 16 0 013.5 5.7A1.5 1.5 0 015 4z" />,
+    phone: (
+      <path d="M5 4h3.5l1.6 4-2 1.4a12 12 0 005.5 5.5l1.4-2 4 1.6V19a1.5 1.5 0 01-1.7 1.5A16 16 0 013.5 5.7A1.5 1.5 0 015 4z" />
+    ),
     mail: (
       <>
         <rect x="3" y="5" width="18" height="14" rx="3" />
@@ -948,7 +1052,9 @@ function Icon({ name, size = 18, className = '' }) {
         <path d="M9 6v12" strokeDasharray="2 2" />
       </>
     ),
-    spark: <path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6L12 3z" />,
+    spark: (
+      <path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6L12 3z" />
+    ),
     ban: (
       <>
         <circle cx="12" cy="12" r="8.5" />
@@ -972,7 +1078,7 @@ function Icon({ name, size = 18, className = '' }) {
 
   return (
     <svg
-      className={'ico ' + className}
+      className={"ico " + className}
       width={size}
       height={size}
       viewBox="0 0 24 24"
@@ -991,7 +1097,13 @@ function Icon({ name, size = 18, className = '' }) {
 
 function Cross({ size = 22 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
       <path d="M10 3h4v7h7v4h-7v7h-4v-7H3v-4h7V3z" fill="currentColor" />
     </svg>
   );
@@ -1265,8 +1377,51 @@ const CSS_SITE = `
 .nav-links button{padding:9px 14px; border-radius:9px; font-size:14px; font-weight:500; color:#475569; transition:background .18s, color .18s}
 .nav-links button:hover{background:#eef4f7; color:var(--text)}
 .nav-actions{display:flex; align-items:center; gap:10px}
-.nav-burger{display:none}
-.nav-drop{display:none}
+
+/* -- the three-line button ------------------------------------------------ */
+/* Always rendered, revealed at the 900px switch. Three real bars instead of an
+   icon glyph, so it can never silently render as nothing. */
+.nav-burger{
+  display:none; flex-direction:column; align-items:center; justify-content:center; gap:5px;
+  width:44px; height:44px; flex:none; padding:0; border-radius:13px;
+  border:1px solid var(--border); background:#fff; cursor:pointer; box-shadow:var(--sh1);
+  transition:border-color .2s, box-shadow .2s, transform .2s var(--ease);
+  -webkit-tap-highlight-color:transparent;
+}
+.nav-burger i{display:block; width:19px; height:2px; border-radius:2px; background:var(--text); transition:transform .26s var(--ease)}
+.nav-burger:hover{border-color:var(--pr4); box-shadow:var(--sh2)}
+.nav-burger:hover i:first-child{transform:translateY(-1px)}
+.nav-burger:hover i:last-child{transform:translateY(1px)}
+.nav-burger:active{transform:scale(.95)}
+.nav-burger:focus-visible{outline:2px solid var(--pr3); outline-offset:2px}
+
+/* -- off canvas mobile menu ---------------------------------------------- */
+.nav-scrim{
+  position:fixed; inset:0; z-index:150; background:rgba(6,40,43,.55); backdrop-filter:blur(3px);
+  opacity:0; visibility:hidden; transition:opacity .28s var(--ease), visibility .28s;
+  touch-action:none; overscroll-behavior:contain;
+}
+.nav-scrim.on{opacity:1; visibility:visible}
+.nav-sheet{
+  position:fixed; top:0; right:0; bottom:0; z-index:155; width:min(88vw,352px);
+  display:flex; flex-direction:column; background:#fff; box-shadow:var(--sh4);
+  transform:translateX(101%); visibility:hidden;
+  transition:transform .34s var(--ease), visibility .34s;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.nav-sheet.open{transform:none; visibility:visible}
+.nav-sheet-head{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 16px; border-bottom:1px solid var(--border2)}
+.nav-sheet-body{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:13px 12px 6px; display:flex; flex-direction:column; gap:5px}
+.nav-item{display:flex; align-items:center; gap:13px; width:100%; padding:12px 13px; border-radius:var(--r2); text-align:left; color:var(--text); transition:background .18s, transform .18s var(--ease)}
+.nav-item:hover,.nav-item:focus-visible{background:#f0fdfa; outline:none}
+.nav-item:active{transform:scale(.99)}
+.nav-item-ico{width:40px; height:40px; flex:none; border-radius:13px; display:grid; place-items:center; background:#f0fdfa; color:var(--pr)}
+.nav-item-txt{min-width:0; flex:1}
+.nav-item b{display:block; font-size:14.5px; font-weight:600; line-height:1.35}
+.nav-item small{display:block; font-size:12px; color:var(--muted); line-height:1.45}
+.nav-item-go{color:var(--light); flex:none}
+.nav-sheet-foot{padding:14px 16px 16px; border-top:1px solid var(--border2); background:#fafcfd; display:flex; flex-direction:column; gap:9px}
+.nav-sheet-foot .btn{width:100%}
 
 /* ------------------------------------------------------------------ hero -- */
 .hero{position:relative; overflow:hidden; background:#06282b; color:#fff; padding:84px 0 96px}
@@ -1631,13 +1786,10 @@ const CSS_ADMIN = `
   .adm-scrim{position:fixed; inset:0; z-index:105; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); animation:fade .2s ease}
 }
 @media (max-width:860px){
-  .nav-links{display:none}
-  .nav-actions .btn-outline{display:none}
-  .nav-burger{display:inline-flex}
-  .nav-drop{display:block; border-top:1px solid var(--border); background:#fff; padding:12px 0 16px; animation:fadeUp .26s var(--ease)}
-  .nav-drop .container{display:flex; flex-direction:column; gap:6px}
-  .nav-drop button{text-align:left; padding:12px 14px; border-radius:var(--r1); font-size:14.5px; font-weight:500}
-  .nav-drop button:hover{background:#eef4f7}
+  /* Navigation is no longer toggled here. The old rule only hid .btn-outline,
+     which left the nowrap "List your clinic" CTA in the bar and pushed the
+     burger outside the clipped viewport. The whole switch now lives in one
+     place: the 900px block of the adaptive layer. */
   .section{padding:52px 0}
   .hero{padding:60px 0 70px}
   .feat-grid,.steps-strip{grid-template-columns:1fr}
@@ -1926,129 +2078,332 @@ const CSS_MEDIA = `
 `;
 
 const CSS_RESP = `
-/* long emails, addresses and booking ids must wrap, never widen the page */
-.kv dd,.tk-mini b,.tk-mini small,.who b,.contact span,.lq-cap,.adm-clinic{overflow-wrap:anywhere; word-break:break-word}
-img,svg,video,canvas{max-width:100%}
-input,select,textarea,button{max-width:100%}
-/* overflow:clip (not hidden) kills sideways scroll WITHOUT breaking the
-   sticky sidebar and sticky admin topbar, which overflow:hidden would. */
-@supports (overflow:clip){
-  html,body{overflow-x:clip}
+/* ============================================================================
+ * ADAPTIVE LAYER
+ *
+ * Concatenated LAST, so it always wins the cascade and can never be disturbed
+ * by the component blocks above it. Five parts, in this order:
+ *
+ *   1. responsive tokens   one gutter / rhythm knob per breakpoint
+ *   2. fluid type scale    clamp() keeps the hierarchy at every width
+ *   3. overflow root fixes  every fixed width becomes a maximum width
+ *   4. breakpoint ladder   2200 / 1800 / 1600 / 1400 / 1280 / 1080 / 900 /
+ *                          768 / 600 / 420 / 340
+ *   5. orientation, touch and print
+ *
+ * The ladder in plain terms:
+ *   1920+  large monitor      1440  desktop         1280  laptop
+ *   1080   tablet landscape   900   tablet portrait  = THE NAV SWITCH
+ *   768    large phone        600   phone portrait   420  small phone
+ * ========================================================================== */
+
+/* -- 1. responsive tokens ------------------------------------------------- */
+/* Spacing is driven by four variables instead of hundreds of hard-coded pixel
+   values, so a breakpoint retunes the whole app in four lines and similar
+   components can never drift apart. */
+:root{
+  --pad:22px;       /* screen-edge gutter       */
+  --sec:70px;       /* section vertical rhythm  */
+  --cardpad:26px;   /* card interior padding    */
+  --panelpad:24px;  /* panel + modal padding    */
 }
-/* real viewport height on mobile, where 100vh hides behind the URL bar */
+.container,.container-sm{padding-left:var(--pad); padding-right:var(--pad)}
+.section{padding:var(--sec) 0}
+.section-tight{padding:calc(var(--sec) * .63) 0}
+.card-pad{padding:var(--cardpad)}
+.panel-body{padding:var(--panelpad)}
+.panel-head{padding:calc(var(--panelpad) * .82) var(--panelpad)}
+.modal-body{padding:var(--panelpad)}
+.modal-head{padding:calc(var(--panelpad) * .82) var(--panelpad)}
+.modal-foot{padding:16px var(--panelpad)}
+/* the mobile menu locks the page behind it instead of letting it scroll */
+body.mcf-lock{overflow:hidden}
+/* real viewport height on phones, where 100vh hides behind the browser bar */
 @supports (height:100dvh){
-  .auth,.adm{min-height:100dvh}
+  #root,.mcf,.auth,.adm,.own-gate{min-height:100dvh}
   .adm-side{height:100dvh}
 }
 
-@media (min-width:1600px){
-  .container{max-width:1400px}
-  .container-sm{max-width:960px}
-  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+/* -- 2. fluid type: one hierarchy that survives every screen -------------- */
+/* Each step keeps its rank - page title > section title > body > caption - it
+   just breathes with the viewport instead of staying desktop-huge on a phone.
+   Lower bounds are all comfortably readable without zooming. */
+h1{font-size:clamp(27px,5.2vw,50px)}
+h2{font-size:clamp(21px,3.4vw,32px)}
+h3{font-size:clamp(16.5px,2vw,19px)}
+h4{font-size:clamp(15px,1.7vw,16px)}
+.panel-head h3,.modal-head h3{font-size:clamp(15.5px,1.9vw,17px)}
+.hero-copy .lead{font-size:clamp(15px,1.7vw,16.5px)}
+.sec-head p.lead{font-size:clamp(14px,1.5vw,15px)}
+.form-card h2,.auth-card h2{font-size:clamp(20px,3vw,25px)}
+.own-gate-card h2{font-size:clamp(19px,2.6vw,22px)}
+.cc-head h3{font-size:clamp(16px,1.9vw,17.5px)}
+/* the big numeric readouts - these are the app identity, so they scale hard */
+.hero-token b{font-size:clamp(40px,11vw,52px)}
+.token-box b{font-size:clamp(42px,13vw,66px)}
+.stat-txt b{font-size:clamp(23px,4.4vw,31px)}
+.an-tile b{font-size:clamp(20px,3.6vw,26px)}
+.next-card b{font-size:clamp(32px,8vw,44px)}
+.lq-dial b{font-size:clamp(38px,10vw,54px)}
+.tk-ring-in b{font-size:clamp(32px,8.5vw,44px)}
+.bp-live b{font-size:clamp(19px,4.2vw,24px)}
+
+/* -- 3. overflow: fix the cause, never just hide the symptom -------------- */
+/* Any fixed or minimum width wider than a 320px screen IS the overflow bug.
+   min(X,100%) reads as "X, or the screen, whichever is smaller": the desktop
+   intent is preserved and sideways scroll becomes impossible. */
+.qrc{width:min(300px,100%)}
+.clinic-grid{grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))}
+.own-grid{grid-template-columns:repeat(auto-fill,minmax(min(318px,100%),1fr))}
+.stat-grid{grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}
+.an-grid{grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr))}
+.lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(84px,100%),1fr))}
+.dir-tools .input-icon{min-width:min(220px,100%)}
+.qrc-side{min-width:min(230px,100%)}
+.lq-hero-txt{min-width:min(220px,100%)}
+.bp-id{min-width:min(240px,100%)}
+.next-card .nc-txt{min-width:min(200px,100%)}
+.own-bar .input-icon{flex:1 1 min(260px,100%)}
+.hero-panel{max-width:min(440px,100%)}
+.auth-card,.toast{max-width:min(520px,100%)}
+.own-gate-card{max-width:min(430px,100%)}
+.bp-live > div{flex:1 1 auto; min-width:0}
+.trend-col{min-width:30px}
+/* unbreakable strings - emails, urls, addresses, booking ids, clinic names */
+.contact span,.copy-row,.qrc-url,.own-meta span,.recap b,.kv dd,.lq-cap,
+.adm-clinic,.adm-clinic b,.adm-clinic span,.cc-meta div,.bp-id p,
+.own-card-id b,.own-card-id span,.tk-mini b,.tk-mini small,.who b{overflow-wrap:anywhere; word-break:break-word}
+/* media can never outgrow its frame, and never distorts doing it */
+img,svg,video,canvas{max-width:100%}
+img{height:auto}
+.cc-av img,.bp-av img,.up-thumb img,.qrc-av img{width:100%; height:100%; object-fit:cover}
+input,select,textarea,button{max-width:100%}
+/* the blurred decorative orbs are clipped by their own section, not the page */
+.hero,.bp-banner,.next-card,.lq-hero,.token-box,.own-gate,.auth-side{overflow:hidden}
+/* deliberate horizontal scrollers: keep the gesture inside, hide the bar */
+.chips,.tk-strip,.trend,.table-wrap{overscroll-behavior-x:contain; -webkit-overflow-scrolling:touch}
+.chips{scrollbar-width:none}
+.chips::-webkit-scrollbar{height:0}
+/* safety net only, AFTER the real fixes above. clip (not hidden) is required:
+   overflow:hidden on html/body silently kills position:sticky. */
+@supports (overflow:clip){
+  html,body{overflow-x:clip}
 }
 
+/* -- 4a. large monitors: cap line length, keep the whitespace generous ---- */
+@media (min-width:1600px){
+  :root{--sec:80px}
+  .container{max-width:1400px}
+  .container-sm{max-width:1000px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(96px,100%),1fr))}
+}
+@media (min-width:1800px){
+  .adm{grid-template-columns:296px 1fr}
+  .adm-body{width:100%; max-width:1640px; margin:0 auto}
+  .adm-top{padding-left:34px; padding-right:34px}
+}
+@media (min-width:2200px){
+  :root{--pad:26px}
+  .container{max-width:1560px}
+}
+
+/* -- 4b. laptops --------------------------------------------------------- */
+@media (max-width:1400px){
+  .adm{grid-template-columns:248px 1fr}
+}
 @media (max-width:1280px){
+  :root{--sec:62px; --cardpad:24px}
   .adm{grid-template-columns:232px 1fr}
   .adm-body{padding:20px}
   .ft-grid{gap:24px}
 }
 
+/* -- 4c. tablet landscape / small laptop --------------------------------- */
 @media (max-width:1080px){
+  :root{--pad:20px; --sec:58px}
+  .feat-grid,.steps-strip{grid-template-columns:1fr 1fr}
   .lq-hero-in{gap:20px}
   .tk-grid{gap:16px}
 }
 
+/* -- 4d. tablet portrait: THE NAV SWITCH --------------------------------- */
 @media (max-width:900px){
-  .container,.container-sm{padding:0 18px}
-  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:13px}
-  .an-grid{grid-template-columns:repeat(auto-fit,minmax(178px,1fr)); gap:13px}
-  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:14px}
+  :root{--nav:64px; --cardpad:22px; --panelpad:20px}
+  /* one place, one switch: desktop links and header CTAs move into the sheet
+     and the three-line button takes their place. */
+  .nav-links,.nav-actions{display:none}
+  .nav-burger{display:inline-flex}
+  .nav-in{gap:12px}
+  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr)); gap:13px}
+  .an-grid{grid-template-columns:repeat(auto-fit,minmax(min(178px,100%),1fr)); gap:13px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(78px,100%),1fr)); gap:14px}
+  .filters{grid-template-columns:1fr 1fr}
+  .filters .input-icon{grid-column:1/-1}
   .adm-top{padding:13px 18px}
-  .adm-body{padding:18px}
-  .panel-head{padding:17px 18px}
-  .panel-body{padding:18px}
+  .adm-body{padding:18px; gap:18px}
+  .set-grid{gap:18px}
+  .sec-head{margin-bottom:24px}
+  .dir-tools{max-width:100%}
 }
 
+/* -- 4e. large phone and phone landscape --------------------------------- */
 @media (max-width:768px){
-  :root{--nav:62px}
-  .container,.container-sm{padding:0 16px}
+  :root{--pad:18px; --sec:52px}
+  /* 16px is the threshold below which iOS zooms the page on focus. Every text
+     entry control sits at or above it from here down, so tapping a field can
+     no longer jerk the layout sideways. */
+  .input,.select,.textarea,.date-pick input{font-size:16px}
+  .select{padding-right:42px}
+  /* one button height, one radius, one label size across the whole app */
+  .btn{min-height:46px; padding:12px 18px}
+  .btn-sm{min-height:40px; padding:9px 14px; font-size:13.5px}
+  .btn-lg{min-height:50px; padding:14px 22px; font-size:15.5px}
+  .btn-icon{width:42px; height:42px; min-height:42px}
+  .hero-cta{gap:10px}
+  .hero-cta .btn{flex:1 1 auto; justify-content:center}
+  .hero-stats{gap:16px 26px; padding-top:20px}
+  .bp{padding:18px 0 54px}
+  .bp-banner{padding:22px; gap:18px}
+  .bp-layout{gap:20px}
+  .form-card{padding:24px}
+  .cc{padding:20px}
   .lq-hero{padding:18px}
   .lq-hero-in{flex-direction:column; align-items:flex-start; gap:16px}
-  .lq-dial{width:106px; height:106px}
-  .lq-dial b{font-size:41px}
-  .lq-hero-txt{min-width:0; width:100%}
+  .lq-dial{width:104px; height:104px}
+  .lq-hero-txt{width:100%}
   .lq-bar{align-items:stretch}
-  .lq-legend{gap:10px}
-  .lq-toggle{flex:1; justify-content:center}
-  .modal-foot .btn{flex:1; min-width:130px; justify-content:center}
+  .lq-toggle{flex:1 1 auto; justify-content:center}
+  .tk-card{padding:18px}
+  .tk-eta{grid-template-columns:repeat(3,1fr); gap:9px}
+  .modal-foot .btn{flex:1 1 auto; min-width:140px; justify-content:center}
   .row-actions{flex-wrap:wrap}
   .adm-top-actions{width:100%}
+  .adm-top-actions .btn{flex:1 1 auto; justify-content:center}
+  .date-pick{flex:1 1 auto; min-width:0}
+  .date-pick input{min-width:0; width:100%}
+  .day-head{padding:12px 15px}
+  .own-seg{width:100%}
+  .own-seg button,.own-actions .btn{flex:1 1 auto; justify-content:center}
+  /* label-less drill-down cells stay left aligned when the table stacks */
+  .tbl-drill td:not([data-label]){justify-content:flex-start; text-align:left}
 }
 
+/* -- 4f. phone portrait: purpose built, not shrunk ----------------------- */
 @media (max-width:600px){
-  .stat-grid{grid-template-columns:1fr 1fr; gap:11px}
-  .stat{padding:15px; gap:11px}
+  :root{--pad:16px; --sec:46px; --nav:60px; --cardpad:18px; --panelpad:16px}
+  .brand{font-size:16.5px}
+  .hero{padding:48px 0 58px}
+  .hero-cta{margin:24px 0 22px}
+  /* two dense tiles read better than one stretched card on a phone - this is
+     the Swiggy/Zomato stat-grid pattern, not a squeezed desktop row. */
+  .stat-grid,.an-grid{grid-template-columns:1fr 1fr; gap:11px}
+  .stat{padding:14px; gap:11px; border-radius:var(--r2)}
   .stat-ico{width:38px; height:38px; border-radius:11px}
-  .stat-txt b{font-size:24px}
-  .an-grid{grid-template-columns:1fr 1fr; gap:11px}
   .an-tile{padding:14px}
-  .an-tile b{font-size:21px}
-  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(64px,1fr)); gap:11px}
+  .next-card{padding:18px; gap:14px}
+  .next-card .btn{width:100%; justify-content:center}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(64px,100%),1fr)); gap:11px}
   .lq-peb{font-size:19px}
   .lq-peb u{font-size:7.5px; bottom:8px}
   .lq-pill{font-size:11.5px; padding:7px 11px}
-  .tk-eta{grid-template-columns:repeat(3,1fr); gap:8px}
-  .tk-eta div{padding:10px 6px}
-  .tk-eta b{font-size:17px}
+  /* the OTP row shares the width instead of demanding 6 x 52px */
+  .otp-boxes{gap:8px; margin:20px 0 6px}
+  .otp-box{flex:1 1 0; width:auto; min-width:0; max-width:52px; height:56px; font-size:21px}
+  .token-box{padding:22px}
+  .done-ring{width:76px; height:76px}
+  .tk-mine{padding:22px 16px}
+  .tk-ring{width:134px; height:134px}
+  .tk-eta div{padding:11px 7px}
+  .tk-eta b{font-size:18px}
   .tk-eta small{font-size:8.5px; letter-spacing:.03em}
-  .tk-card{padding:17px}
-  .tk-mine{padding:20px 16px}
-  .tk-ring{width:132px; height:132px}
-  .tk-ring-in b{font-size:38px}
-  .adm-top-actions .btn{flex:1; justify-content:center}
-  .date-pick{flex:1; min-width:0}
-  .date-pick input{min-width:0; width:100%}
+  .ft{padding:40px 0 22px}
+  .empty{padding:44px 18px}
+  .loading-block{padding:48px 16px}
+  .crumb{margin-bottom:10px}
+  /* modals become thumb-reachable bottom sheets that can never exceed the
+     screen, with the actions pinned below the scrolling body */
+  .modal-back{padding:0; align-items:flex-end}
+  .modal{max-width:none; margin:0; border-radius:22px 22px 0 0; animation:sheetIn .32s var(--ease)}
+  .modal-body{max-height:calc(100vh - 210px)}
+  .modal-foot{padding-bottom:max(16px,env(safe-area-inset-bottom))}
+  .toast-wrap{bottom:max(18px,env(safe-area-inset-bottom))}
+  .nav-sheet{width:min(90vw,340px)}
 }
+@supports (height:100dvh){
+  @media (max-width:600px){
+    .modal-body{max-height:calc(100dvh - 210px)}
+  }
+}
+@keyframes sheetIn{from{opacity:.4; transform:translateY(26px)} to{opacity:1; transform:none}}
 
-@media (max-width:400px){
-  .container,.container-sm{padding:0 13px}
-  .stat-grid,.an-grid{grid-template-columns:1fr}
-  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(58px,1fr)); gap:9px}
+/* -- 4g. small phones, the 320-412 band ---------------------------------- */
+@media (max-width:420px){
+  :root{--pad:14px; --cardpad:16px}
+  .brand-mark{width:32px; height:32px; border-radius:10px}
+  .stat{padding:13px}
+  .stat-txt small{font-size:11px}
+  .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(58px,100%),1fr)); gap:9px}
   .lq-peb{font-size:17px}
   .lq-peb i{width:17px; height:17px; font-size:9px; top:3px; right:3px}
   .lq-peb u{display:none}
-  .tk-eta{grid-template-columns:1fr}
   .kv{grid-template-columns:1fr; gap:2px 0}
   .kv dt{margin-top:9px}
-  .modal-foot .btn{width:100%; flex:none}
+  .otp-box{height:52px; font-size:19px}
+  .chips{gap:7px}
+  .badge{padding:4px 9px; font-size:11px}
+  /* stacked actions, primary on top where the thumb lands first */
+  .modal-foot{flex-direction:column-reverse}
+  .modal-foot .btn{width:100%; flex:none; min-width:0}
+}
+@media (max-width:340px){
+  .stat-grid,.an-grid{grid-template-columns:1fr}
+  .tk-eta{grid-template-columns:1fr}
 }
 
-/* short screens: landscape phones and split-screen windows */
-@media (max-height:640px){
+/* -- 5a. landscape phones: height is the scarce axis, not width ---------- */
+@media (orientation:landscape) and (max-height:640px){
+  .nav{position:static}
+  .hero{padding:38px 0 44px}
+  .auth-side{padding:30px 24px}
+  .modal-back{align-items:flex-start; padding:14px}
+  .modal{max-width:min(560px,100%); border-radius:var(--r3); animation:pop .3s var(--ease)}
   .modal-body{max-height:none}
-}
-@media (max-height:560px) and (min-width:601px){
   .adm-side{gap:12px; padding:14px}
-  .lq-hero{padding:14px}
+  .lq-hero{padding:16px}
+  .tk-mine{padding:18px 16px}
 }
 
-/* touch: fingers need bigger targets than a pointer, and a hover state must
-   never be able to "stick" after a tap */
+/* -- 5b. touch: fingers need more room than a cursor, and a tap must never
+         leave a hover state stuck on a card ---------------------------- */
 @media (hover:none) and (pointer:coarse){
-  .btn:not(.btn-icon){min-height:44px}
-  .btn-sm:not(.btn-icon){min-height:38px}
+  .btn:not(.btn-icon){min-height:46px}
+  .btn-sm:not(.btn-icon){min-height:40px}
+  .btn-link{min-height:38px}
+  .nav-item{min-height:58px}
+  .adm-nav button{min-height:46px}
+  .adm-side-foot button{min-height:44px}
+  .own-seg button{min-height:40px}
+  .chip{min-height:38px}
   .lq-toggle{min-height:42px}
-  .chip{min-height:36px}
-  .lq-cap{padding:6px 8px; font-size:11px}
+  .lq-cap{min-height:26px; padding:5px 8px; font-size:11px}
   .lq-peb:hover{transform:none}
   .lq-peb:hover::after{animation:none; opacity:0}
   .lq-peb:active{transform:scale(.94)}
   .lq-peb:active::after{opacity:1; animation:lqGlint .9s var(--ease)}
-  .stat:hover,.an-tile:hover,.tk-mini:hover{transform:none; box-shadow:var(--sh1)}
+  .stat:hover,.an-tile:hover,.tk-mini:hover,.cc:hover,.own-card:hover,
+  .feat:hover,.step-item:hover,.qrc:hover{transform:none; box-shadow:var(--sh1)}
+  .cc:hover::before{opacity:0}
+  .btn-primary:hover:not(:disabled),.btn-outline:hover:not(:disabled),
+  .btn-soft:hover:not(:disabled),.btn-white:hover:not(:disabled),
+  .btn-dark:hover:not(:disabled){transform:none}
+  .nav-item:hover{background:transparent}
+  .nav-item:active{background:#f0fdfa}
 }
 
+/* -- 5c. print ----------------------------------------------------------- */
 @media print{
-  .adm-side,.adm-top,.nav,.ft,.lq-bar,.row-actions,.toast-wrap{display:none !important}
+  .adm-side,.adm-top,.nav,.nav-burger,.nav-sheet,.nav-scrim,.ft,.lq-bar,
+  .row-actions,.toast-wrap{display:none !important}
   .adm{grid-template-columns:1fr}
   .adm-body{padding:0}
   .lq-peb{box-shadow:none; border:1px solid #999; color:#000; background:#fff}
@@ -2059,7 +2414,7 @@ input,select,textarea,button{max-width:100%}
 let stylesInjected = false;
 
 function injectStyles() {
-  if (stylesInjected || typeof document === 'undefined') return;
+  if (stylesInjected || typeof document === "undefined") return;
 
   /* Vite's starter index.html ships the viewport tag, but if it was ever edited
      out, NOTHING below would scale on a phone - it would render desktop-wide
@@ -2067,17 +2422,27 @@ function injectStyles() {
      that file, which keeps this a two-file project. */
   let viewport = document.querySelector('meta[name="viewport"]');
   if (!viewport) {
-    viewport = document.createElement('meta');
-    viewport.setAttribute('name', 'viewport');
+    viewport = document.createElement("meta");
+    viewport.setAttribute("name", "viewport");
     document.head.appendChild(viewport);
   }
-  viewport.setAttribute('content', 'width=device-width, initial-scale=1, viewport-fit=cover');
+  viewport.setAttribute(
+    "content",
+    "width=device-width, initial-scale=1, viewport-fit=cover",
+  );
 
-  const existing = document.getElementById('mcf-styles');
+  const existing = document.getElementById("mcf-styles");
   if (existing) existing.remove();
-  const tag = document.createElement('style');
-  tag.id = 'mcf-styles';
-  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_MEDIA + CSS_RESP;
+  const tag = document.createElement("style");
+  tag.id = "mcf-styles";
+  tag.textContent =
+    CSS_BASE +
+    CSS_SITE +
+    CSS_ADMIN +
+    CSS_QUEUE +
+    CSS_OWNER +
+    CSS_MEDIA +
+    CSS_RESP;
   document.head.appendChild(tag);
   stylesInjected = true;
 }
@@ -2091,27 +2456,32 @@ injectStyles();
  * ========================================================================== */
 
 function parseHash() {
-  const raw = (typeof window !== 'undefined' ? window.location.hash || '' : '').replace(/^#/, '');
-  const [pathPart, queryPart] = raw.split('?');
-  const parts = pathPart.split('/').filter(Boolean);
+  const raw = (
+    typeof window !== "undefined" ? window.location.hash || "" : ""
+  ).replace(/^#/, "");
+  const [pathPart, queryPart] = raw.split("?");
+  const parts = pathPart.split("/").filter(Boolean);
   const query = {};
   if (queryPart) {
-    for (const pair of queryPart.split('&')) {
-      const [k, v] = pair.split('=');
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v || '');
+    for (const pair of queryPart.split("&")) {
+      const [k, v] = pair.split("=");
+      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v || "");
     }
   }
-  if (!parts.length) return { name: 'home', id: '', query };
+  if (!parts.length) return { name: "home", id: "", query };
   const [head, second] = parts;
-  if (head === 'clinic' && second) return { name: 'booking', id: second, query };
-  if (head === 'admin') return { name: 'admin', id: second || '', query };
+  if (head === "clinic" && second)
+    return { name: "booking", id: second, query };
+  if (head === "admin") return { name: "admin", id: second || "", query };
   // #/track and #/queue are the same screen. The optional second segment lets
   // a clinic hand out a direct link to its own live board.
-  if (head === 'track' || head === 'queue') return { name: 'track', id: second || '', query };
+  if (head === "track" || head === "queue")
+    return { name: "track", id: second || "", query };
   // #/owner is the platform owner console - intentionally not linked in the nav.
-  if (head === 'owner') return { name: 'owner', id: second || '', query };
-  if (['register', 'login', 'forgot'].includes(head)) return { name: head, id: '', query };
-  return { name: 'home', id: '', query };
+  if (head === "owner") return { name: "owner", id: second || "", query };
+  if (["register", "login", "forgot"].includes(head))
+    return { name: head, id: "", query };
+  return { name: "home", id: "", query };
 }
 
 function useHashRoute() {
@@ -2120,17 +2490,17 @@ function useHashRoute() {
   useEffect(() => {
     const onChange = () => {
       setRoute(parseHash());
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    window.addEventListener('hashchange', onChange);
-    return () => window.removeEventListener('hashchange', onChange);
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
   }, []);
 
   const go = useCallback((to) => {
-    const next = '#' + (to.startsWith('/') ? to : '/' + to);
+    const next = "#" + (to.startsWith("/") ? to : "/" + to);
     if (window.location.hash === next) {
       setRoute(parseHash());
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } else {
       window.location.hash = next;
     }
@@ -2147,9 +2517,23 @@ function Toasts({ items, dismiss }) {
   return (
     <div className="toast-wrap">
       {items.map((t) => (
-        <div key={t.id} className={'toast toast-' + t.type} role="status" onClick={() => dismiss(t.id)}>
+        <div
+          key={t.id}
+          className={"toast toast-" + t.type}
+          role="status"
+          onClick={() => dismiss(t.id)}
+        >
           <b>
-            <Icon name={t.type === 'err' ? 'alert' : t.type === 'info' ? 'spark' : 'check'} size={13} />
+            <Icon
+              name={
+                t.type === "err"
+                  ? "alert"
+                  : t.type === "info"
+                    ? "spark"
+                    : "check"
+              }
+              size={13}
+            />
           </b>
           <span>{t.message}</span>
         </div>
@@ -2161,39 +2545,49 @@ function Toasts({ items, dismiss }) {
 function useToasts() {
   const [items, setItems] = useState([]);
 
-  const dismiss = useCallback((id) => setItems((list) => list.filter((t) => t.id !== id)), []);
-
-  const notify = useCallback(
-    (message, type = 'ok') => {
-      if (!message) return;
-      const id = Date.now() + Math.random();
-      setItems((list) => [...list.slice(-2), { id, message, type }]);
-      window.setTimeout(() => setItems((list) => list.filter((t) => t.id !== id)), 4600);
-    },
-    []
+  const dismiss = useCallback(
+    (id) => setItems((list) => list.filter((t) => t.id !== id)),
+    [],
   );
+
+  const notify = useCallback((message, type = "ok") => {
+    if (!message) return;
+    const id = Date.now() + Math.random();
+    setItems((list) => [...list.slice(-2), { id, message, type }]);
+    window.setTimeout(
+      () => setItems((list) => list.filter((t) => t.id !== id)),
+      4600,
+    );
+  }, []);
 
   return { items, notify, dismiss };
 }
 
-function Alert({ kind = 'err', children }) {
+function Alert({ kind = "err", children }) {
   if (!children) return null;
-  const icon = kind === 'err' ? 'alert' : kind === 'ok' ? 'check' : kind === 'warn' ? 'alert' : 'spark';
+  const icon =
+    kind === "err"
+      ? "alert"
+      : kind === "ok"
+        ? "check"
+        : kind === "warn"
+          ? "alert"
+          : "spark";
   return (
-    <div className={'alert alert-' + kind}>
+    <div className={"alert alert-" + kind}>
       <Icon name={icon} size={16} />
       <span>{children}</span>
     </div>
   );
 }
 
-function Reveal({ children, delay = 0, className = '' }) {
+function Reveal({ children, delay = 0, className = "" }) {
   const ref = useRef(null);
   const [shown, setShown] = useState(false);
 
   useEffect(() => {
     const node = ref.current;
-    if (!node || typeof IntersectionObserver === 'undefined') {
+    if (!node || typeof IntersectionObserver === "undefined") {
       setShown(true);
       return undefined;
     }
@@ -2204,14 +2598,18 @@ function Reveal({ children, delay = 0, className = '' }) {
           observer.disconnect();
         }
       },
-      { threshold: 0.12, rootMargin: '0px 0px -40px 0px' }
+      { threshold: 0.12, rootMargin: "0px 0px -40px 0px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
 
   return (
-    <div ref={ref} className={'reveal ' + (shown ? 'in ' : '') + className} style={{ transitionDelay: delay + 'ms' }}>
+    <div
+      ref={ref}
+      className={"reveal " + (shown ? "in " : "") + className}
+      style={{ transitionDelay: delay + "ms" }}
+    >
       {children}
     </div>
   );
@@ -2226,9 +2624,10 @@ function CountUp({ value = 0, duration = 900 }) {
     const from = fromRef.current;
     if (from === target) return undefined;
 
-    const reduce = typeof window !== 'undefined' && window.matchMedia
-      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      : false;
+    const reduce =
+      typeof window !== "undefined" && window.matchMedia
+        ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        : false;
 
     if (reduce) {
       fromRef.current = target;
@@ -2255,20 +2654,27 @@ function CountUp({ value = 0, duration = 900 }) {
 function Modal({ title, subtitle, onClose, children, footer, wide = false }) {
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === "Escape") onClose();
     };
-    document.addEventListener('keydown', onKey);
+    document.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    document.body.style.overflow = "hidden";
     return () => {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
     };
   }, [onClose]);
 
   return (
-    <div className="modal-back" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className={'modal' + (wide ? ' modal-wide' : '')} role="dialog" aria-modal="true">
+    <div
+      className="modal-back"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div
+        className={"modal" + (wide ? " modal-wide" : "")}
+        role="dialog"
+        aria-modal="true"
+      >
         <div className="modal-head">
           <div className="grow">
             <h3>{title}</h3>
@@ -2286,10 +2692,10 @@ function Modal({ title, subtitle, onClose, children, footer, wide = false }) {
 }
 
 function Spinner({ dark = false }) {
-  return <span className={'spinner' + (dark ? ' spinner-dark' : '')} />;
+  return <span className={"spinner" + (dark ? " spinner-dark" : "")} />;
 }
 
-function Loading({ label = 'Loading' }) {
+function Loading({ label = "Loading" }) {
   return (
     <div className="loading-block">
       <Spinner dark />
@@ -2310,13 +2716,17 @@ function SkeletonCards({ count = 6 }) {
 
 function StatusBadge({ status }) {
   const map = {
-    booked: ['badge-booked', 'clock', 'Waiting'],
-    visited: ['badge-visited', 'check', 'Visited'],
-    cancelled: ['badge-cancelled', 'ban', 'Cancelled'],
+    booked: ["badge-booked", "clock", "Waiting"],
+    visited: ["badge-visited", "check", "Visited"],
+    cancelled: ["badge-cancelled", "ban", "Cancelled"],
   };
-  const [cls, icon, label] = map[status] || ['badge-soft', 'clock', status || '-'];
+  const [cls, icon, label] = map[status] || [
+    "badge-soft",
+    "clock",
+    status || "-",
+  ];
   return (
-    <span className={'badge ' + cls}>
+    <span className={"badge " + cls}>
       <Icon name={icon} size={12} />
       {label}
     </span>
@@ -2324,24 +2734,34 @@ function StatusBadge({ status }) {
 }
 
 function QuotaBadge({ quota }) {
-  const emergency = quota === 'Emergency';
+  const emergency = quota === "Emergency";
   return (
-    <span className={'badge ' + (emergency ? 'badge-emergency' : 'badge-general')}>
-      <Icon name={emergency ? 'alert' : 'shield'} size={12} />
-      {quota || 'General'}
+    <span
+      className={"badge " + (emergency ? "badge-emergency" : "badge-general")}
+    >
+      <Icon name={emergency ? "alert" : "shield"} size={12} />
+      {quota || "General"}
     </span>
   );
 }
 
 function SourceBadge({ source }) {
-  const walkIn = source === 'walk-in';
-  return <span className={'badge ' + (walkIn ? 'badge-walkin' : 'badge-online')}>{walkIn ? 'Walk-in' : 'Online'}</span>;
+  const walkIn = source === "walk-in";
+  return (
+    <span className={"badge " + (walkIn ? "badge-walkin" : "badge-online")}>
+      {walkIn ? "Walk-in" : "Online"}
+    </span>
+  );
 }
 
-function Avatar({ clinic, className = 'cc-av' }) {
+function Avatar({ clinic, className = "cc-av" }) {
   return (
     <div className={className}>
-      {clinic && clinic.photo ? <img src={clinic.photo} alt="" loading="lazy" /> : initials(clinic ? clinic.clinicName : '')}
+      {clinic && clinic.photo ? (
+        <img src={clinic.photo} alt="" loading="lazy" />
+      ) : (
+        initials(clinic ? clinic.clinicName : "")
+      )}
     </div>
   );
 }
@@ -2352,6 +2772,26 @@ function Navbar({ go, active }) {
   const [open, setOpen] = useState(false);
   const clinic = getStoredClinic();
 
+  /* A drawer has to close on Escape, must not let the page behind it scroll,
+     and must never stay open if the viewport grows back to desktop width. */
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onResize = () => {
+      if (window.innerWidth > 900) setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    document.body.classList.add("mcf-lock");
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+      document.body.classList.remove("mcf-lock");
+    };
+  }, [open]);
+
   const jump = (to) => {
     setOpen(false);
     go(to);
@@ -2359,70 +2799,176 @@ function Navbar({ go, active }) {
 
   const findClinics = () => {
     setOpen(false);
-    if (active !== 'home') {
-      go('/');
+    if (active !== "home") {
+      go("/");
       window.setTimeout(() => {
-        const node = document.getElementById('directory');
-        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const node = document.getElementById("directory");
+        if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 260);
     } else {
-      const node = document.getElementById('directory');
-      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const node = document.getElementById("directory");
+      if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
 
   return (
-    <header className="nav">
-      <div className="container nav-in">
-        <button className="brand" onClick={() => jump('/')}>
-          <span className="brand-mark">
-            <Cross size={19} />
-          </span>
-          MediCare <i>Flow</i>
-        </button>
+    <>
+      <header className="nav">
+        <div className="container nav-in">
+          <button className="brand" onClick={() => jump("/")}>
+            <span className="brand-mark">
+              <Cross size={19} />
+            </span>
+            MediCare <i>Flow</i>
+          </button>
 
-        <nav className="nav-links">
-          <button onClick={findClinics}>Find a clinic</button>
-          <button onClick={() => jump('/track')}>Live token queue</button>
-          <button onClick={() => jump('/register')}>For clinics</button>
+          {/* desktop only - both of these are hidden at the 900px switch */}
+          <nav className="nav-links">
+            <button onClick={findClinics}>Find a clinic</button>
+            <button onClick={() => jump("/track")}>Live token queue</button>
+            <button onClick={() => jump("/register")}>For clinics</button>
+          </nav>
+
+          <div className="nav-actions">
+            {clinic ? (
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => jump("/admin/" + clinic.clinicId)}
+              >
+                <Icon name="grid" size={15} /> Dashboard
+              </button>
+            ) : (
+              <>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => jump("/login")}
+                >
+                  Clinic sign in
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => jump("/register")}
+                >
+                  <Icon name="plus" size={15} /> List your clinic
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* THE FIX. This button is a direct child of .nav-in and never of
+              .nav-actions, so hiding the desktop CTAs on a phone can no longer
+              hide it - and because nothing beside it can refuse to shrink, it
+              can no longer be pushed outside the clipped viewport either. */}
+          <button
+            className="nav-burger"
+            onClick={() => setOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={open ? "true" : "false"}
+          >
+            <i />
+            <i />
+            <i />
+          </button>
+        </div>
+      </header>
+
+      {/* The sheet and its scrim sit OUTSIDE <header> on purpose: .nav uses
+          backdrop-filter, which makes it a containing block for fixed-position
+          children, so a drawer nested inside it would be trapped inside the
+          header strip instead of covering the screen. */}
+      <div
+        className={"nav-scrim" + (open ? " on" : "")}
+        onClick={() => setOpen(false)}
+        aria-hidden="true"
+      />
+
+      <aside
+        className={"nav-sheet" + (open ? " open" : "")}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Menu"
+      >
+        <div className="nav-sheet-head">
+          <span className="brand">
+            <span className="brand-mark">
+              <Cross size={17} />
+            </span>
+            MediCare <i>Flow</i>
+          </span>
+          <button
+            className="btn-icon"
+            onClick={() => setOpen(false)}
+            aria-label="Close menu"
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+
+        <nav className="nav-sheet-body">
+          <button className="nav-item" onClick={findClinics}>
+            <span className="nav-item-ico">
+              <Icon name="search" size={17} />
+            </span>
+            <span className="nav-item-txt">
+              <b>Find a clinic</b>
+              <small>Browse doctors and book a token</small>
+            </span>
+            <Icon name="right" size={16} className="nav-item-go" />
+          </button>
+
+          <button className="nav-item" onClick={() => jump("/track")}>
+            <span className="nav-item-ico">
+              <Icon name="activity" size={17} />
+            </span>
+            <span className="nav-item-txt">
+              <b>Live token queue</b>
+              <small>See the token being seen right now</small>
+            </span>
+            <Icon name="right" size={16} className="nav-item-go" />
+          </button>
+
+          <button className="nav-item" onClick={() => jump("/register")}>
+            <span className="nav-item-ico">
+              <Icon name="building" size={17} />
+            </span>
+            <span className="nav-item-txt">
+              <b>For clinics</b>
+              <small>List your clinic on MediCare Flow</small>
+            </span>
+            <Icon name="right" size={16} className="nav-item-go" />
+          </button>
         </nav>
 
-        <div className="nav-actions">
+        <div className="nav-sheet-foot">
           {clinic ? (
-            <button className="btn btn-primary btn-sm" onClick={() => jump('/admin/' + clinic.clinicId)}>
-              <Icon name="grid" size={15} /> Dashboard
+            <button
+              className="btn btn-primary btn-block"
+              onClick={() => jump("/admin/" + clinic.clinicId)}
+            >
+              <Icon name="grid" size={16} /> Open dashboard
             </button>
           ) : (
             <>
-              <button className="btn btn-outline btn-sm" onClick={() => jump('/login')}>
-                Clinic sign in
+              <button
+                className="btn btn-primary btn-block"
+                onClick={() => jump("/register")}
+              >
+                <Icon name="plus" size={16} /> List your clinic
               </button>
-              <button className="btn btn-primary btn-sm" onClick={() => jump('/register')}>
-                <Icon name="plus" size={15} /> List your clinic
+              <button
+                className="btn btn-outline btn-block"
+                onClick={() => jump("/login")}
+              >
+                <Icon name="shield" size={16} /> Clinic sign in
               </button>
             </>
           )}
-          <button className="btn-icon nav-burger" onClick={() => setOpen((v) => !v)} aria-label="Menu">
-            <Icon name={open ? 'close' : 'menu'} size={19} />
-          </button>
+          <p className="tiny muted center">
+            No patient account needed - book with your mobile number.
+          </p>
         </div>
-      </div>
-
-      {open ? (
-        <div className="nav-drop">
-          <div className="container">
-            <button onClick={findClinics}>Find a clinic</button>
-            <button onClick={() => jump('/track')}>Live token queue</button>
-            <button onClick={() => jump('/register')}>Register your clinic</button>
-            {clinic ? (
-              <button onClick={() => jump('/admin/' + clinic.clinicId)}>Open dashboard</button>
-            ) : (
-              <button onClick={() => jump('/login')}>Clinic sign in</button>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </header>
+      </aside>
+    </>
   );
 }
 
@@ -2432,38 +2978,41 @@ function Footer({ go }) {
       <div className="container">
         <div className="ft-grid">
           <div>
-            <button className="brand" onClick={() => go('/')}>
+            <button className="brand" onClick={() => go("/")}>
               <span className="brand-mark">
                 <Cross size={19} />
               </span>
               MediCare <i>Flow</i>
             </button>
             <p>
-              A multi-clinic appointment and queue platform. Patients book in seconds with OTP-verified email, clinics manage
-              their own private queue from a dedicated dashboard.
+              A multi-clinic appointment and queue platform. Patients book in
+              seconds with OTP-verified email, clinics manage their own private
+              queue from a dedicated dashboard.
             </p>
           </div>
           <div>
             <h4>Patients</h4>
             <div className="ft-links">
-              <button onClick={() => go('/')}>Find a clinic</button>
-              <button onClick={() => go('/track')}>Live token queue</button>
+              <button onClick={() => go("/")}>Find a clinic</button>
+              <button onClick={() => go("/track")}>Live token queue</button>
             </div>
           </div>
           <div>
             <h4>Clinics</h4>
             <div className="ft-links">
-              <button onClick={() => go('/register')}>Register your clinic</button>
-              <button onClick={() => go('/login')}>Admin sign in</button>
-              <button onClick={() => go('/forgot')}>Forgot password</button>
+              <button onClick={() => go("/register")}>
+                Register your clinic
+              </button>
+              <button onClick={() => go("/login")}>Admin sign in</button>
+              <button onClick={() => go("/forgot")}>Forgot password</button>
             </div>
           </div>
         </div>
         <div className="ft-base">
           <span>{BRAND} - built on the MTSS booking engine.</span>
           <span>
-            Appointment records auto-clear after 15 days.{' '}
-            <button className="btn-link" onClick={() => go('/owner')}>
+            Appointment records auto-clear after 15 days.{" "}
+            <button className="btn-link" onClick={() => go("/owner")}>
               Master admin
             </button>
           </span>
@@ -2493,7 +3042,8 @@ function ClinicCard({ clinic, go, delay }) {
 
         <div className="cc-tags">
           <span className="badge badge-general">
-            <Icon name="stetho" size={12} /> {clinic.specialization || 'General Physician'}
+            <Icon name="stetho" size={12} />{" "}
+            {clinic.specialization || "General Physician"}
           </span>
           <span className="badge badge-soft">
             <span className="live-dot" /> Live queue
@@ -2503,7 +3053,9 @@ function ClinicCard({ clinic, go, delay }) {
         <div className="cc-meta">
           <div>
             <Icon name="pin" size={15} />
-            <span>{[clinic.address, clinic.city].filter(Boolean).join(', ')}</span>
+            <span>
+              {[clinic.address, clinic.city].filter(Boolean).join(", ")}
+            </span>
           </div>
           {clinic.timings ? (
             <div>
@@ -2535,7 +3087,10 @@ function ClinicCard({ clinic, go, delay }) {
         </div>
 
         <div className="cc-foot">
-          <button className="btn btn-primary grow" onClick={() => go('/clinic/' + clinic.clinicId)}>
+          <button
+            className="btn btn-primary grow"
+            onClick={() => go("/clinic/" + clinic.clinicId)}
+          >
             Book appointment <Icon name="right" size={16} />
           </button>
         </div>
@@ -2547,14 +3102,14 @@ function ClinicCard({ clinic, go, delay }) {
 function HomePage({ go }) {
   const [clinics, setClinics] = useState([]);
   const [specs, setSpecs] = useState([]);
-  const [spec, setSpec] = useState('All');
-  const [search, setSearch] = useState('');
+  const [spec, setSpec] = useState("All");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let alive = true;
-    api('/clinics/specializations').then((data) => {
+    api("/clinics/specializations").then((data) => {
       if (alive && data.success) setSpecs(data.specializations || []);
     });
     return () => {
@@ -2567,14 +3122,14 @@ function HomePage({ go }) {
     const timer = window.setTimeout(async () => {
       setLoading(true);
       const params = new URLSearchParams();
-      if (search.trim()) params.set('search', search.trim());
-      if (spec !== 'All') params.set('specialization', spec);
+      if (search.trim()) params.set("search", search.trim());
+      if (spec !== "All") params.set("specialization", spec);
       const query = params.toString();
-      const data = await api('/clinics' + (query ? '?' + query : ''));
+      const data = await api("/clinics" + (query ? "?" + query : ""));
       if (!alive) return;
       if (data.success) {
         setClinics(data.clinics || []);
-        setError('');
+        setError("");
       } else {
         setClinics([]);
         setError(data.message);
@@ -2599,8 +3154,8 @@ function HomePage({ go }) {
   }, [clinics]);
 
   const toDirectory = () => {
-    const node = document.getElementById('directory');
-    if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const node = document.getElementById("directory");
+    if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
@@ -2620,14 +3175,18 @@ function HomePage({ go }) {
               Healthcare queues that <em>actually flow.</em>
             </h1>
             <p className="lead">
-              Find a trusted clinic near you, verify with a single email OTP, and walk in knowing your exact token number.
-              No accounts, no phone calls, no guessing.
+              Find a trusted clinic near you, verify with a single email OTP,
+              and walk in knowing your exact token number. No accounts, no phone
+              calls, no guessing.
             </p>
             <div className="hero-cta">
               <button className="btn btn-white btn-lg" onClick={toDirectory}>
                 Find a clinic <Icon name="right" size={17} />
               </button>
-              <button className="btn btn-lg btn-soft" onClick={() => go('/register')}>
+              <button
+                className="btn btn-lg btn-soft"
+                onClick={() => go("/register")}
+              >
                 <Icon name="building" size={17} /> List your clinic
               </button>
             </div>
@@ -2695,20 +3254,45 @@ function HomePage({ go }) {
               </span>
               <h2>Built for real waiting rooms</h2>
               <p className="lead">
-                Every clinic gets its own isolated booking page, queue counter and dashboard. Patients get a token number
-                before they leave home.
+                Every clinic gets its own isolated booking page, queue counter
+                and dashboard. Patients get a token number before they leave
+                home.
               </p>
             </div>
           </div>
 
           <div className="feat-grid">
             {[
-              ['shield', 'OTP verified bookings', 'Every online appointment is confirmed with a 6-digit code sent to the patient email, so no-shows and prank bookings drop.'],
-              ['ticket', 'Sequential daily tokens', 'Token numbers reset per clinic per day and are allocated atomically, so two patients can never receive the same number.'],
-              ['alert', 'General and Emergency quota', 'Reception can flag urgent cases at booking time and see the emergency split live on the dashboard.'],
-              ['users', 'Walk-ins in the same queue', 'Patients who arrive at the counter get the next token from the same sequence as online bookings.'],
-              ['chart', 'Analytics that matter', 'Date-range reporting on visited, waiting and cancelled appointments with a General versus Emergency breakdown.'],
-              ['clock', 'Automatic clean-up', 'Appointment records older than 15 days are removed every night, so the database stays lean by itself.'],
+              [
+                "shield",
+                "OTP verified bookings",
+                "Every online appointment is confirmed with a 6-digit code sent to the patient email, so no-shows and prank bookings drop.",
+              ],
+              [
+                "ticket",
+                "Sequential daily tokens",
+                "Token numbers reset per clinic per day and are allocated atomically, so two patients can never receive the same number.",
+              ],
+              [
+                "alert",
+                "General and Emergency quota",
+                "Reception can flag urgent cases at booking time and see the emergency split live on the dashboard.",
+              ],
+              [
+                "users",
+                "Walk-ins in the same queue",
+                "Patients who arrive at the counter get the next token from the same sequence as online bookings.",
+              ],
+              [
+                "chart",
+                "Analytics that matter",
+                "Date-range reporting on visited, waiting and cancelled appointments with a General versus Emergency breakdown.",
+              ],
+              [
+                "clock",
+                "Automatic clean-up",
+                "Appointment records older than 15 days are removed every night, so the database stays lean by itself.",
+              ],
             ].map(([icon, title, body], index) => (
               <Reveal key={title} delay={index * 70}>
                 <div className="feat">
@@ -2733,7 +3317,10 @@ function HomePage({ go }) {
                 <Icon name="pin" size={13} /> Clinic directory
               </span>
               <h2>Care near you</h2>
-              <p className="lead">Pick a clinic and reserve your place in its queue for today or the next five days.</p>
+              <p className="lead">
+                Pick a clinic and reserve your place in its queue for today or
+                the next five days.
+              </p>
             </div>
             <div className="dir-tools">
               <div className="input-icon">
@@ -2751,8 +3338,12 @@ function HomePage({ go }) {
 
           {specs.length ? (
             <div className="chips">
-              {['All', ...specs].map((item) => (
-                <button key={item} className={'chip' + (spec === item ? ' on' : '')} onClick={() => setSpec(item)}>
+              {["All", ...specs].map((item) => (
+                <button
+                  key={item}
+                  className={"chip" + (spec === item ? " on" : "")}
+                  onClick={() => setSpec(item)}
+                >
                   {item}
                 </button>
               ))}
@@ -2770,7 +3361,12 @@ function HomePage({ go }) {
           ) : clinics.length ? (
             <div className="clinic-grid">
               {clinics.map((clinic, index) => (
-                <ClinicCard key={clinic.clinicId} clinic={clinic} go={go} delay={Math.min(index, 5) * 60} />
+                <ClinicCard
+                  key={clinic.clinicId}
+                  clinic={clinic}
+                  go={go}
+                  delay={Math.min(index, 5) * 60}
+                />
               ))}
             </div>
           ) : (
@@ -2780,23 +3376,26 @@ function HomePage({ go }) {
               </div>
               <h3>No clinics found</h3>
               <p>
-                {search || spec !== 'All'
-                  ? 'Nothing matches that search yet. Try a different name, specialty or city.'
-                  : 'No clinic has registered yet. Be the first to list a clinic on MediCare Flow.'}
+                {search || spec !== "All"
+                  ? "Nothing matches that search yet. Try a different name, specialty or city."
+                  : "No clinic has registered yet. Be the first to list a clinic on MediCare Flow."}
               </p>
-              <div className="row" style={{ justifyContent: 'center' }}>
-                {search || spec !== 'All' ? (
+              <div className="row" style={{ justifyContent: "center" }}>
+                {search || spec !== "All" ? (
                   <button
                     className="btn btn-outline"
                     onClick={() => {
-                      setSearch('');
-                      setSpec('All');
+                      setSearch("");
+                      setSpec("All");
                     }}
                   >
                     <Icon name="refresh" size={16} /> Clear filters
                   </button>
                 ) : null}
-                <button className="btn btn-primary" onClick={() => go('/register')}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => go("/register")}
+                >
                   <Icon name="plus" size={16} /> Register your clinic
                 </button>
               </div>
@@ -2818,9 +3417,18 @@ function HomePage({ go }) {
           </div>
           <div className="steps-strip">
             {[
-              ['Fill in your details', 'Choose General or Emergency quota, pick a date within the next six days and enter patient details.'],
-              ['Verify your email', 'A 6-digit OTP lands in your inbox. Enter it to lock the appointment in.'],
-              ['Get your token', 'Your queue number and booking ID appear instantly and are emailed to you as a receipt.'],
+              [
+                "Fill in your details",
+                "Choose General or Emergency quota, pick a date within the next six days and enter patient details.",
+              ],
+              [
+                "Verify your email",
+                "A 6-digit OTP lands in your inbox. Enter it to lock the appointment in.",
+              ],
+              [
+                "Get your token",
+                "Your queue number and booking ID appear instantly and are emailed to you as a receipt.",
+              ],
             ].map(([title, body], index) => (
               <Reveal key={title} delay={index * 90}>
                 <div className="step-item">
@@ -2841,15 +3449,23 @@ function HomePage({ go }) {
             <div className="hero-orb a" />
             <div className="hero-orb b" />
             <div className="bp-id">
-              <span className="eyebrow eyebrow-light">For clinics and doctors</span>
-              <h1 style={{ fontSize: 'clamp(22px,3vw,30px)' }}>Run your whole queue from one dashboard.</h1>
+              <span className="eyebrow eyebrow-light">
+                For clinics and doctors
+              </span>
+              <h1 style={{ fontSize: "clamp(22px,3vw,30px)" }}>
+                Run your whole queue from one dashboard.
+              </h1>
               <p>
-                Register in a minute, choose your own admin user ID and password, and get a public booking page plus a private
-                dashboard with stats, analytics and walk-in entry.
+                Register in a minute, choose your own admin user ID and
+                password, and get a public booking page plus a private dashboard
+                with stats, analytics and walk-in entry.
               </p>
             </div>
             <div className="bp-live">
-              <button className="btn btn-white btn-lg" onClick={() => go('/register')}>
+              <button
+                className="btn btn-white btn-lg"
+                onClick={() => go("/register")}
+              >
                 Register clinic <Icon name="right" size={17} />
               </button>
             </div>
@@ -2875,11 +3491,21 @@ function HomePage({ go }) {
  * ========================================================================== */
 
 const QUOTAS = [
-  { value: 'General', title: 'General Quota', note: 'Standard consultation queue', em: false },
-  { value: 'Emergency', title: 'Emergency Quota', note: 'Urgent - flagged for the doctor', em: true },
+  {
+    value: "General",
+    title: "General Quota",
+    note: "Standard consultation queue",
+    em: false,
+  },
+  {
+    value: "Emergency",
+    title: "Emergency Quota",
+    note: "Urgent - flagged for the doctor",
+    em: true,
+  },
 ];
 
-const GENDERS = ['Male', 'Female', 'Other'];
+const GENDERS = ["Male", "Female", "Other"];
 
 function PatientFields({ form, set, dates = [], walkIn = false }) {
   return (
@@ -2893,8 +3519,12 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             <button
               type="button"
               key={item.value}
-              className={'quota' + (item.em ? ' em' : '') + (form.quota === item.value ? ' on' : '')}
-              onClick={() => set('quota', item.value)}
+              className={
+                "quota" +
+                (item.em ? " em" : "") +
+                (form.quota === item.value ? " on" : "")
+              }
+              onClick={() => set("quota", item.value)}
               aria-pressed={form.quota === item.value}
             >
               <span className="quota-mark">
@@ -2915,7 +3545,7 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
           className="input"
           required
           value={form.name}
-          onChange={(e) => set('name', e.target.value)}
+          onChange={(e) => set("name", e.target.value)}
           placeholder="Enter the patient's full name"
           autoComplete="name"
         />
@@ -2926,7 +3556,12 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
           <label>
             Gender <span className="req">*</span>
           </label>
-          <select className="select" required value={form.gender} onChange={(e) => set('gender', e.target.value)}>
+          <select
+            className="select"
+            required
+            value={form.gender}
+            onChange={(e) => set("gender", e.target.value)}
+          >
             <option value="">Select gender</option>
             {GENDERS.map((item) => (
               <option key={item} value={item}>
@@ -2944,7 +3579,9 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             required
             inputMode="numeric"
             value={form.age}
-            onChange={(e) => set('age', e.target.value.replace(/\D/g, '').slice(0, 3))}
+            onChange={(e) =>
+              set("age", e.target.value.replace(/\D/g, "").slice(0, 3))
+            }
             placeholder="1 - 120"
           />
         </div>
@@ -2960,7 +3597,9 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             required
             inputMode="decimal"
             value={form.weight}
-            onChange={(e) => set('weight', e.target.value.replace(/[^0-9.]/g, '').slice(0, 6))}
+            onChange={(e) =>
+              set("weight", e.target.value.replace(/[^0-9.]/g, "").slice(0, 6))
+            }
             placeholder="e.g. 62"
           />
         </div>
@@ -2970,11 +3609,23 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
           </label>
           {walkIn ? (
             <>
-              <input className="input" value={fmtLongDate(todayISO())} disabled readOnly />
-              <span className="hint">Walk-in patients always join today's queue.</span>
+              <input
+                className="input"
+                value={fmtLongDate(todayISO())}
+                disabled
+                readOnly
+              />
+              <span className="hint">
+                Walk-in patients always join today's queue.
+              </span>
             </>
           ) : (
-            <select className="select" required value={form.date} onChange={(e) => set('date', e.target.value)}>
+            <select
+              className="select"
+              required
+              value={form.date}
+              onChange={(e) => set("date", e.target.value)}
+            >
               {dates.length ? null : <option value="">Loading dates...</option>}
               {dates.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -2992,15 +3643,19 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             Mobile Number <span className="req">*</span>
           </label>
           <input
-            className={'input' + (form.mobile && form.mobile.length !== 10 ? ' bad' : '')}
+            className={
+              "input" + (form.mobile && form.mobile.length !== 10 ? " bad" : "")
+            }
             required
             inputMode="numeric"
             value={form.mobile}
-            onChange={(e) => set('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))}
+            onChange={(e) =>
+              set("mobile", e.target.value.replace(/\D/g, "").slice(0, 10))
+            }
             placeholder="10-digit mobile number"
             autoComplete="tel"
           />
-          <span className="hint">{(form.mobile || '').length}/10 digits</span>
+          <span className="hint">{(form.mobile || "").length}/10 digits</span>
         </div>
         <div className="field">
           <label>
@@ -3010,12 +3665,14 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             className="input"
             type="email"
             value={form.email}
-            onChange={(e) => set('email', e.target.value)}
+            onChange={(e) => set("email", e.target.value)}
             placeholder="name@example.com"
             autoComplete="email"
           />
           <span className="hint">
-            {walkIn ? 'Add it to email the token receipt.' : 'Optional - add it to get the confirmation and cancellation emails.'}
+            {walkIn
+              ? "Add it to email the token receipt."
+              : "Optional - add it to get the confirmation and cancellation emails."}
           </span>
         </div>
       </div>
@@ -3029,7 +3686,7 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
           required
           rows="3"
           value={form.address}
-          onChange={(e) => set('address', e.target.value)}
+          onChange={(e) => set("address", e.target.value)}
           placeholder="House / street, area, city"
         />
       </div>
@@ -3040,7 +3697,9 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
 /* Six single-character boxes with auto-advance, backspace, arrows and paste. */
 function OtpBoxes({ value, onChange, disabled = false }) {
   const refs = useRef([]);
-  const chars = [0, 1, 2, 3, 4, 5].map((index) => String(value || '')[index] || '');
+  const chars = [0, 1, 2, 3, 4, 5].map(
+    (index) => String(value || "")[index] || "",
+  );
 
   const focusBox = (index) => {
     const el = refs.current[index];
@@ -3048,42 +3707,44 @@ function OtpBoxes({ value, onChange, disabled = false }) {
   };
 
   const handleChange = (index, raw) => {
-    const digit = raw.replace(/\D/g, '').slice(-1);
+    const digit = raw.replace(/\D/g, "").slice(-1);
     const next = chars.slice();
     next[index] = digit;
-    onChange(next.join('').slice(0, 6));
+    onChange(next.join("").slice(0, 6));
     if (digit && index < 5) focusBox(index + 1);
   };
 
   const handleKeyDown = (index, event) => {
-    if (event.key === 'Backspace') {
+    if (event.key === "Backspace") {
       event.preventDefault();
       const next = chars.slice();
       if (next[index]) {
-        next[index] = '';
-        onChange(next.join(''));
+        next[index] = "";
+        onChange(next.join(""));
         return;
       }
       if (index > 0) {
-        next[index - 1] = '';
-        onChange(next.join(''));
+        next[index - 1] = "";
+        onChange(next.join(""));
         focusBox(index - 1);
       }
       return;
     }
-    if (event.key === 'ArrowLeft' && index > 0) {
+    if (event.key === "ArrowLeft" && index > 0) {
       event.preventDefault();
       focusBox(index - 1);
     }
-    if (event.key === 'ArrowRight' && index < 5) {
+    if (event.key === "ArrowRight" && index < 5) {
       event.preventDefault();
       focusBox(index + 1);
     }
   };
 
   const handlePaste = (event) => {
-    const text = event.clipboardData ? event.clipboardData.getData('text') : '';
-    const digits = String(text || '').replace(/\D/g, '').slice(0, 6);
+    const text = event.clipboardData ? event.clipboardData.getData("text") : "";
+    const digits = String(text || "")
+      .replace(/\D/g, "")
+      .slice(0, 6);
     if (!digits) return;
     event.preventDefault();
     onChange(digits);
@@ -3098,7 +3759,7 @@ function OtpBoxes({ value, onChange, disabled = false }) {
           ref={(el) => {
             refs.current[index] = el;
           }}
-          className={'otp-box' + (char ? ' filled' : '')}
+          className={"otp-box" + (char ? " filled" : "")}
           value={char}
           inputMode="numeric"
           autoComplete="one-time-code"
@@ -3107,7 +3768,7 @@ function OtpBoxes({ value, onChange, disabled = false }) {
           autoFocus={index === 0}
           onChange={(e) => handleChange(index, e.target.value)}
           onKeyDown={(e) => handleKeyDown(index, e)}
-          aria-label={'OTP digit ' + (index + 1)}
+          aria-label={"OTP digit " + (index + 1)}
         />
       ))}
     </div>
@@ -3117,28 +3778,29 @@ function OtpBoxes({ value, onChange, disabled = false }) {
 function BookingPage({ clinicId, go, notify }) {
   const [clinic, setClinic] = useState(null);
   const [dates, setDates] = useState([]);
-  const [fatal, setFatal] = useState('');
+  const [fatal, setFatal] = useState("");
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [otp, setOtp] = useState('');
+  const [otp, setOtp] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [resendIn, setResendIn] = useState(0);
   // only becomes true if the API runs with REQUIRE_BOOKING_OTP=true
   const [otpMode, setOtpMode] = useState(false);
 
-  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const set = (key, value) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
   useEffect(() => {
     let alive = true;
-    setFatal('');
+    setFatal("");
     setClinic(null);
     (async () => {
-      const data = await api('/clinics/' + encodeURIComponent(clinicId));
+      const data = await api("/clinics/" + encodeURIComponent(clinicId));
       if (!alive) return;
       if (!data.success) {
-        setFatal(data.message || 'This clinic could not be loaded.');
+        setFatal(data.message || "This clinic could not be loaded.");
         return;
       }
       const list = Array.isArray(data.dates) ? data.dates : [];
@@ -3146,7 +3808,9 @@ function BookingPage({ clinicId, go, notify }) {
       setDates(list);
       setForm((current) => ({
         ...current,
-        date: current.date || (list.length ? list[0].value : data.today || todayISO()),
+        date:
+          current.date ||
+          (list.length ? list[0].value : data.today || todayISO()),
       }));
     })();
     return () => {
@@ -3161,7 +3825,7 @@ function BookingPage({ clinicId, go, notify }) {
   }, [resendIn]);
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }, [step]);
 
   /* ONE-STEP BOOKING. Email OTP verification for APPOINTMENTS is switched off,
@@ -3171,8 +3835,11 @@ function BookingPage({ clinicId, go, notify }) {
   const submitBooking = async (event) => {
     if (event && event.preventDefault) event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/booking/create', { method: 'POST', body: { clinicId, form } });
+    setError("");
+    const data = await api("/booking/create", {
+      method: "POST",
+      body: { clinicId, form },
+    });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
@@ -3180,39 +3847,48 @@ function BookingPage({ clinicId, go, notify }) {
     }
     if (data.otpRequired) {
       setOtpMode(true);
-      setOtp('');
+      setOtp("");
       setStep(2);
       setResendIn(60);
-      notify(data.message || 'OTP sent to your email.', 'ok');
+      notify(data.message || "OTP sent to your email.", "ok");
       return;
     }
     setResult(data.appointment);
     setStep(3);
-    notify('Appointment confirmed. Token #' + data.appointment.bookingNumber + '.', 'ok');
+    notify(
+      "Appointment confirmed. Token #" + data.appointment.bookingNumber + ".",
+      "ok",
+    );
   };
 
   /* Kept for the Resend code button, and for REQUIRE_BOOKING_OTP=true. */
   const sendOtp = async (event) => {
     if (event && event.preventDefault) event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/booking/send-otp', { method: 'POST', body: { clinicId, form } });
+    setError("");
+    const data = await api("/booking/send-otp", {
+      method: "POST",
+      body: { clinicId, form },
+    });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
       return;
     }
-    setOtp('');
+    setOtp("");
     setStep(2);
     setResendIn(60);
-    notify(data.message || 'OTP sent to your email.', 'ok');
+    notify(data.message || "OTP sent to your email.", "ok");
   };
 
   const verify = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/booking/verify', { method: 'POST', body: { clinicId, email: form.email, otp } });
+    setError("");
+    const data = await api("/booking/verify", {
+      method: "POST",
+      body: { clinicId, email: form.email, otp },
+    });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
@@ -3220,14 +3896,20 @@ function BookingPage({ clinicId, go, notify }) {
     }
     setResult(data.appointment);
     setStep(3);
-    notify('Appointment confirmed. Token #' + data.appointment.bookingNumber + '.', 'ok');
+    notify(
+      "Appointment confirmed. Token #" + data.appointment.bookingNumber + ".",
+      "ok",
+    );
   };
 
   const bookAnother = () => {
     setResult(null);
-    setOtp('');
-    setError('');
-    setForm({ ...EMPTY_FORM, date: dates.length ? dates[0].value : todayISO() });
+    setOtp("");
+    setError("");
+    setForm({
+      ...EMPTY_FORM,
+      date: dates.length ? dates[0].value : todayISO(),
+    });
     setOtpMode(false);
     setStep(1);
   };
@@ -3235,7 +3917,7 @@ function BookingPage({ clinicId, go, notify }) {
   if (fatal) {
     return (
       <div className="bp container pg">
-        <button className="crumb" onClick={() => go('/')}>
+        <button className="crumb" onClick={() => go("/")}>
           <Icon name="left" size={15} /> All clinics
         </button>
         <div className="panel">
@@ -3245,7 +3927,7 @@ function BookingPage({ clinicId, go, notify }) {
           <div className="panel-body">
             <Alert kind="err">{fatal}</Alert>
             <div className="row" style={{ marginTop: 16 }}>
-              <button className="btn btn-primary" onClick={() => go('/')}>
+              <button className="btn btn-primary" onClick={() => go("/")}>
                 <Icon name="grid" size={15} /> Browse clinics
               </button>
             </div>
@@ -3257,17 +3939,26 @@ function BookingPage({ clinicId, go, notify }) {
 
   if (!clinic) return <Loading label="Loading clinic" />;
 
-  const queue = clinic.todayQueue || { booked: 0, visited: 0, waiting: 0, nextToken: null };
-  const firstName = String((result && result.name) || '').split(' ')[0];
-  const stepLabels = otpMode ? STEPS : ['Details', 'Confirmed'];
+  const queue = clinic.todayQueue || {
+    booked: 0,
+    visited: 0,
+    waiting: 0,
+    nextToken: null,
+  };
+  const firstName = String((result && result.name) || "").split(" ")[0];
+  const stepLabels = otpMode ? STEPS : ["Details", "Confirmed"];
   const stepFlow = otpMode ? [1, 2, 3] : [1, 3];
   const stepNotes = otpMode
-    ? ['Patient details and date', 'Code sent to your email', 'Token number issued']
-    : ['Patient details and date', 'Token number issued'];
+    ? [
+        "Patient details and date",
+        "Code sent to your email",
+        "Token number issued",
+      ]
+    : ["Patient details and date", "Token number issued"];
 
   return (
     <div className="bp container pg">
-      <button className="crumb" onClick={() => go('/')}>
+      <button className="crumb" onClick={() => go("/")}>
         <Icon name="left" size={15} /> All clinics
       </button>
 
@@ -3282,7 +3973,10 @@ function BookingPage({ clinicId, go, notify }) {
             <Icon name="stetho" size={15} />
             <span>
               {clinic.doctorName}
-              {clinic.address ? ' - ' + [clinic.address, clinic.city].filter(Boolean).join(', ') : ''}
+              {clinic.address
+                ? " - " +
+                  [clinic.address, clinic.city].filter(Boolean).join(", ")
+                : ""}
             </span>
           </p>
         </div>
@@ -3296,7 +3990,7 @@ function BookingPage({ clinicId, go, notify }) {
             <span>Waiting</span>
           </div>
           <div>
-            <b>{queue.nextToken ? '#' + queue.nextToken : '-'}</b>
+            <b>{queue.nextToken ? "#" + queue.nextToken : "-"}</b>
             <span>Next token</span>
           </div>
         </div>
@@ -3310,17 +4004,20 @@ function BookingPage({ clinicId, go, notify }) {
             </span>
             <h2>Reserve your place in today's queue.</h2>
             <p className="lead">
-              Book for today or any of the next 5 days. Your token number is issued as soon as you submit the form.
+              Book for today or any of the next 5 days. Your token number is
+              issued as soon as you submit the form.
             </p>
           </div>
 
           <div className="steps">
             {stepLabels.map((label, index) => {
               const num = stepFlow[index];
-              const state = step > num ? ' done' : step === num ? ' on' : '';
+              const state = step > num ? " done" : step === num ? " on" : "";
               return (
-                <div className={'step-row' + state} key={label}>
-                  <div className="step-dot">{step > num ? <Icon name="check" size={15} /> : index + 1}</div>
+                <div className={"step-row" + state} key={label}>
+                  <div className="step-dot">
+                    {step > num ? <Icon name="check" size={15} /> : index + 1}
+                  </div>
                   <div className="step-txt">
                     <b>{label}</b>
                     <span>{stepNotes[index]}</span>
@@ -3333,15 +4030,23 @@ function BookingPage({ clinicId, go, notify }) {
           <div className="trust">
             <div>
               <Icon name="shield" size={16} />
-              <span>No account and no OTP - your token is issued the moment you submit the form.</span>
+              <span>
+                No account and no OTP - your token is issued the moment you
+                submit the form.
+              </span>
             </div>
             <div>
               <Icon name="ticket" size={16} />
-              <span>Tokens are sequential per clinic per day, so your position is fixed.</span>
+              <span>
+                Tokens are sequential per clinic per day, so your position is
+                fixed.
+              </span>
             </div>
             <div>
               <Icon name="clock" size={16} />
-              <span>Records are kept for 15 days and then removed automatically.</span>
+              <span>
+                Records are kept for 15 days and then removed automatically.
+              </span>
             </div>
             {clinic.timings ? (
               <div>
@@ -3359,7 +4064,10 @@ function BookingPage({ clinicId, go, notify }) {
                 <Icon name="user" size={13} /> Step 1 of {stepLabels.length}
               </span>
               <h2>Patient details</h2>
-              <p className="lead">Enter the details exactly as they should appear on the clinic's queue list.</p>
+              <p className="lead">
+                Enter the details exactly as they should appear on the clinic's
+                queue list.
+              </p>
 
               <div className="form-grid">
                 <PatientFields form={form} set={set} dates={dates} />
@@ -3372,7 +4080,10 @@ function BookingPage({ clinicId, go, notify }) {
               ) : null}
 
               <div style={{ marginTop: 18 }}>
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy}>
+                <button
+                  className="btn btn-primary btn-lg btn-block"
+                  disabled={busy}
+                >
                   {busy ? (
                     <>
                       <Spinner /> Booking your token...
@@ -3399,7 +4110,8 @@ function BookingPage({ clinicId, go, notify }) {
               <span className="eyebrow">Step 2 of 3</span>
               <h2>Check your inbox</h2>
               <p className="lead">
-                We sent a 6-digit code to <b>{form.email}</b>. It expires in 10 minutes.
+                We sent a 6-digit code to <b>{form.email}</b>. It expires in 10
+                minutes.
               </p>
 
               <OtpBoxes value={otp} onChange={setOtp} disabled={busy} />
@@ -3410,7 +4122,7 @@ function BookingPage({ clinicId, go, notify }) {
                     You can request a new code in <b>{resendIn}s</b>
                   </>
                 ) : (
-                  'Nothing yet? Check the spam folder, then resend.'
+                  "Nothing yet? Check the spam folder, then resend."
                 )}
               </p>
 
@@ -3421,7 +4133,10 @@ function BookingPage({ clinicId, go, notify }) {
               ) : null}
 
               <div className="stack">
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy || otp.length !== 6}>
+                <button
+                  className="btn btn-primary btn-lg btn-block"
+                  disabled={busy || otp.length !== 6}
+                >
                   {busy ? (
                     <>
                       <Spinner /> Confirming...
@@ -3432,14 +4147,19 @@ function BookingPage({ clinicId, go, notify }) {
                     </>
                   )}
                 </button>
-                <button type="button" className="btn btn-ghost" disabled={busy || resendIn > 0} onClick={() => sendOtp()}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={busy || resendIn > 0}
+                  onClick={() => sendOtp()}
+                >
                   <Icon name="refresh" size={15} /> Resend code
                 </button>
                 <button
                   type="button"
                   className="btn-link"
                   onClick={() => {
-                    setError('');
+                    setError("");
                     setStep(1);
                   }}
                 >
@@ -3457,11 +4177,13 @@ function BookingPage({ clinicId, go, notify }) {
               <span className="eyebrow">
                 Step {stepLabels.length} of {stepLabels.length} - confirmed
               </span>
-              <h2>You are all set{firstName ? ', ' + firstName : ''}.</h2>
+              <h2>You are all set{firstName ? ", " + firstName : ""}.</h2>
               <p className="lead">
                 {result.email
-                  ? 'A confirmation with your token number has been emailed to ' + result.email + '.'
-                  : 'Save the token number below - you can follow your place any time from Token queue tracking.'}
+                  ? "A confirmation with your token number has been emailed to " +
+                    result.email +
+                    "."
+                  : "Save the token number below - you can follow your place any time from Token queue tracking."}
               </p>
 
               <div className="token-box">
@@ -3490,13 +4212,16 @@ function BookingPage({ clinicId, go, notify }) {
               </div>
 
               <div className="stack" style={{ marginTop: 22 }}>
-                <button className="btn btn-primary btn-block" onClick={bookAnother}>
+                <button
+                  className="btn btn-primary btn-block"
+                  onClick={bookAnother}
+                >
                   <Icon name="plus" size={15} /> Book another appointment
                 </button>
-                <button className="btn btn-ghost" onClick={() => go('/track')}>
+                <button className="btn btn-ghost" onClick={() => go("/track")}>
                   Track this booking later <Icon name="right" size={15} />
                 </button>
-                <button className="btn-link" onClick={() => go('/')}>
+                <button className="btn-link" onClick={() => go("/")}>
                   Back to all clinics
                 </button>
               </div>
@@ -3524,14 +4249,17 @@ class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    console.error('[MediCare Flow] render error:', error, info);
+    console.error("[MediCare Flow] render error:", error, info);
   }
 
   render() {
     if (!this.state.error) return this.props.children;
-    const message = this.state.error && this.state.error.message ? this.state.error.message : String(this.state.error);
+    const message =
+      this.state.error && this.state.error.message
+        ? this.state.error.message
+        : String(this.state.error);
     return (
-      <div className="container" style={{ padding: '60px 0' }}>
+      <div className="container" style={{ padding: "60px 0" }}>
         <div className="panel">
           <div className="panel-head">
             <h3>This screen hit a rendering error</h3>
@@ -3539,19 +4267,23 @@ class ErrorBoundary extends Component {
           <div className="panel-body">
             <Alert kind="err">{message}</Alert>
             <p className="small muted" style={{ marginTop: 14 }}>
-              The full stack trace is in the browser console. Nothing was lost - reload or go back to the home page.
+              The full stack trace is in the browser console. Nothing was lost -
+              reload or go back to the home page.
             </p>
             <div className="row" style={{ marginTop: 16 }}>
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  window.location.hash = '#/';
+                  window.location.hash = "#/";
                   window.location.reload();
                 }}
               >
                 <Icon name="left" size={15} /> Back to home
               </button>
-              <button className="btn btn-ghost" onClick={() => window.location.reload()}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => window.location.reload()}
+              >
                 <Icon name="refresh" size={15} /> Reload page
               </button>
             </div>
@@ -3564,9 +4296,18 @@ class ErrorBoundary extends Component {
 
 function AuthShell({ children, go, mode }) {
   const copy = {
-    register: ['Put your clinic on the map', 'Registration takes a minute. You choose your own admin user ID and password - there is no shared secret.'],
-    login: ['Welcome back', 'Sign in to manage today\'s queue, add walk-ins and review your analytics.'],
-    forgot: ['Reset your password', 'We email a 6-digit code to the admin address on file, then you choose a new password.'],
+    register: [
+      "Put your clinic on the map",
+      "Registration takes a minute. You choose your own admin user ID and password - there is no shared secret.",
+    ],
+    login: [
+      "Welcome back",
+      "Sign in to manage today's queue, add walk-ins and review your analytics.",
+    ],
+    forgot: [
+      "Reset your password",
+      "We email a 6-digit code to the admin address on file, then you choose a new password.",
+    ],
   }[mode];
 
   return (
@@ -3574,7 +4315,7 @@ function AuthShell({ children, go, mode }) {
       <aside className="auth-side">
         <div className="hero-orb a" />
         <div className="hero-orb b" />
-        <button className="brand" onClick={() => go('/')}>
+        <button className="brand" onClick={() => go("/")}>
           <span className="brand-mark">
             <Cross size={19} />
           </span>
@@ -3582,19 +4323,22 @@ function AuthShell({ children, go, mode }) {
         </button>
 
         <div className="auth-body">
-          <span className="eyebrow eyebrow-light">MediCare Flow for clinics</span>
+          <span className="eyebrow eyebrow-light">
+            MediCare Flow for clinics
+          </span>
           <h2>
-            {copy[0].split(' ').slice(0, -1).join(' ')} <em>{copy[0].split(' ').slice(-1)}</em>
+            {copy[0].split(" ").slice(0, -1).join(" ")}{" "}
+            <em>{copy[0].split(" ").slice(-1)}</em>
           </h2>
           <p>{copy[1]}</p>
 
           <div className="auth-pts">
             {[
-              'Your own public booking page with live queue counts',
-              'Sequential daily tokens per clinic, allocated atomically',
-              'Walk-in entry that shares the same token sequence',
-              'Emergency quota flagging and date-range analytics',
-              'Strict data isolation - no clinic sees another clinic\'s data',
+              "Your own public booking page with live queue counts",
+              "Sequential daily tokens per clinic, allocated atomically",
+              "Walk-in entry that shares the same token sequence",
+              "Emergency quota flagging and date-range analytics",
+              "Strict data isolation - no clinic sees another clinic's data",
             ].map((point) => (
               <div className="auth-pt" key={point}>
                 <Icon name="check" size={16} />
@@ -3604,14 +4348,17 @@ function AuthShell({ children, go, mode }) {
           </div>
         </div>
 
-        <div className="auth-body small" style={{ color: 'rgba(226,242,240,.6)' }}>
+        <div
+          className="auth-body small"
+          style={{ color: "rgba(226,242,240,.6)" }}
+        >
           Powered by the original MTSS booking engine.
         </div>
       </aside>
 
       <main className="auth-main">
-        <div style={{ width: '100%', maxWidth: 520 }}>
-          <button className="crumb" onClick={() => go('/')}>
+        <div style={{ width: "100%", maxWidth: 520 }}>
+          <button className="crumb" onClick={() => go("/")}>
             <Icon name="left" size={15} /> Back to home
           </button>
           {children}
@@ -3623,11 +4370,16 @@ function AuthShell({ children, go, mode }) {
 
 /* Renders as a bare label + control so it drops straight into an existing
    .field wrapper wherever the old "Photo URL" input used to sit. */
-function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = '' }) {
+function ImagePicker({
+  value,
+  onChange,
+  label = "Clinic / doctor photo",
+  hint = "",
+}) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [note, setNote] = useState('');
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
 
   const pick = () => {
     if (!busy && inputRef.current) inputRef.current.click();
@@ -3635,13 +4387,13 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
 
   const handleFile = async (event) => {
     const file = event.target.files && event.target.files[0];
-    if (event.target) event.target.value = ''; // lets the same file be re-picked
+    if (event.target) event.target.value = ""; // lets the same file be re-picked
     if (!file) return;
 
-    setError('');
-    setNote('');
+    setError("");
+    setNote("");
     if (!/^image\//.test(file.type)) {
-      setError('Please choose an image file (JPG, PNG, WEBP or GIF).');
+      setError("Please choose an image file (JPG, PNG, WEBP or GIF).");
       return;
     }
 
@@ -3651,12 +4403,16 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
       payload = await fitImageFile(file);
     } catch (problem) {
       setBusy(false);
-      setError(problem.message || 'That image could not be processed.');
+      setError(problem.message || "That image could not be processed.");
       return;
     }
     if (payload.size > MAX_UPLOAD_BYTES) {
       setBusy(false);
-      setError('Even after resizing that image is ' + Math.round(payload.size / 1024) + ' KB. Please choose a smaller one.');
+      setError(
+        "Even after resizing that image is " +
+          Math.round(payload.size / 1024) +
+          " KB. Please choose a smaller one.",
+      );
       return;
     }
 
@@ -3666,8 +4422,10 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
       setError(data.message);
       return;
     }
-    onChange(data.url || '', data.key || '');
-    setNote('Uploaded - ' + Math.round((data.bytes || payload.size) / 1024) + ' KB');
+    onChange(data.url || "", data.key || "");
+    setNote(
+      "Uploaded - " + Math.round((data.bytes || payload.size) / 1024) + " KB",
+    );
   };
 
   return (
@@ -3681,13 +4439,17 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
           title="Choose a photo"
           onClick={pick}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
+            if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               pick();
             }
           }}
         >
-          {value ? <img src={value} alt="" /> : <Icon name="building" size={22} />}
+          {value ? (
+            <img src={value} alt="" />
+          ) : (
+            <Icon name="building" size={22} />
+          )}
           {busy ? (
             <div className="up-veil">
               <Spinner />
@@ -3696,8 +4458,14 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
         </div>
         <div className="up-body">
           <div className="up-actions">
-            <button type="button" className="btn btn-soft btn-sm" onClick={pick} disabled={busy}>
-              <Icon name={value ? 'refresh' : 'plus'} size={14} /> {value ? 'Replace photo' : 'Upload photo'}
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              onClick={pick}
+              disabled={busy}
+            >
+              <Icon name={value ? "refresh" : "plus"} size={14} />{" "}
+              {value ? "Replace photo" : "Upload photo"}
             </button>
             {value ? (
               <button
@@ -3705,16 +4473,19 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
                 className="btn btn-ghost btn-sm"
                 disabled={busy}
                 onClick={() => {
-                  onChange('', '');
-                  setNote('');
-                  setError('');
+                  onChange("", "");
+                  setNote("");
+                  setError("");
                 }}
               >
                 <Icon name="close" size={14} /> Remove
               </button>
             ) : null}
           </div>
-          <span className="hint">{hint || 'JPG, PNG, WEBP or GIF. Big photos are resized automatically and stored under 900 KB.'}</span>
+          <span className="hint">
+            {hint ||
+              "JPG, PNG, WEBP or GIF. Big photos are resized automatically and stored under 900 KB."}
+          </span>
           {note ? (
             <span className="up-ok">
               <Icon name="check" size={12} /> {note}
@@ -3727,36 +4498,43 @@ function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = 
           ) : null}
         </div>
       </div>
-      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFile}
+        style={{ display: "none" }}
+      />
     </>
   );
 }
 
 function RegisterPage({ go, notify, onSession }) {
   const [form, setForm] = useState({
-    clinicName: '',
-    doctorName: '',
-    specialization: 'General Physician',
-    address: '',
-    city: '',
-    phone: '',
-    photo: '',
-    photoKey: '',
-    timings: '',
-    about: '',
-    adminUserId: '',
-    adminEmail: '',
-    password: '',
-    confirm: '',
+    clinicName: "",
+    doctorName: "",
+    specialization: "General Physician",
+    address: "",
+    city: "",
+    phone: "",
+    photo: "",
+    photoKey: "",
+    timings: "",
+    about: "",
+    adminUserId: "",
+    adminEmail: "",
+    password: "",
+    confirm: "",
   });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [stage, setStage] = useState('form');
-  const [otp, setOtp] = useState('');
-  const [sentTo, setSentTo] = useState('');
+  const [error, setError] = useState("");
+  const [stage, setStage] = useState("form");
+  const [otp, setOtp] = useState("");
+  const [sentTo, setSentTo] = useState("");
   const [resendIn, setResendIn] = useState(0);
 
-  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const set = (key, value) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
   useEffect(() => {
     if (resendIn <= 0) return undefined;
@@ -3769,32 +4547,35 @@ function RegisterPage({ go, notify, onSession }) {
   const sendCode = async (event) => {
     if (event && event.preventDefault) event.preventDefault();
     if (form.password !== form.confirm) {
-      setError('The two passwords do not match.');
+      setError("The two passwords do not match.");
       return;
     }
     setBusy(true);
-    setError('');
+    setError("");
     const { confirm, ...payload } = form;
-    const data = await api('/auth/register/send-otp', { method: 'POST', body: payload });
+    const data = await api("/auth/register/send-otp", {
+      method: "POST",
+      body: payload,
+    });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
       return;
     }
-    setOtp('');
+    setOtp("");
     setSentTo(data.sentTo || form.adminEmail);
-    setStage('otp');
+    setStage("otp");
     setResendIn(60);
-    notify(data.message || 'Verification code sent.', 'ok');
+    notify(data.message || "Verification code sent.", "ok");
   };
 
   /* Step 2 - verifying the code is what actually creates the clinic. */
   const verifyCode = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/auth/register/verify', {
-      method: 'POST',
+    setError("");
+    const data = await api("/auth/register/verify", {
+      method: "POST",
       body: { adminUserId: form.adminUserId, otp },
     });
     setBusy(false);
@@ -3803,11 +4584,11 @@ function RegisterPage({ go, notify, onSession }) {
       return;
     }
     onSession(data.token, data.clinic);
-    notify(data.message || 'Clinic registered successfully.', 'ok');
-    go('/admin/' + data.clinic.clinicId);
+    notify(data.message || "Clinic registered successfully.", "ok");
+    go("/admin/" + data.clinic.clinicId);
   };
 
-  if (stage === 'otp') {
+  if (stage === "otp") {
     return (
       <AuthShell go={go} mode="register">
         <form className="auth-card otp-card" onSubmit={verifyCode} noValidate>
@@ -3817,8 +4598,8 @@ function RegisterPage({ go, notify, onSession }) {
           <span className="eyebrow">Step 2 of 2 - verify email</span>
           <h2>Confirm your email</h2>
           <p className="lead">
-            We sent a 6-digit code to <b>{sentTo}</b>. Enter it to finish creating <b>{form.clinicName}</b>. The code expires in
-            10 minutes.
+            We sent a 6-digit code to <b>{sentTo}</b>. Enter it to finish
+            creating <b>{form.clinicName}</b>. The code expires in 10 minutes.
           </p>
 
           <OtpBoxes value={otp} onChange={setOtp} disabled={busy} />
@@ -3829,7 +4610,7 @@ function RegisterPage({ go, notify, onSession }) {
                 You can request a new code in <b>{resendIn}s</b>
               </>
             ) : (
-              'Nothing yet? Check the spam folder, then resend.'
+              "Nothing yet? Check the spam folder, then resend."
             )}
           </p>
 
@@ -3840,7 +4621,10 @@ function RegisterPage({ go, notify, onSession }) {
           ) : null}
 
           <div className="stack">
-            <button className="btn btn-primary btn-lg btn-block" disabled={busy || otp.length !== 6}>
+            <button
+              className="btn btn-primary btn-lg btn-block"
+              disabled={busy || otp.length !== 6}
+            >
               {busy ? (
                 <>
                   <Spinner /> Creating your clinic...
@@ -3851,15 +4635,20 @@ function RegisterPage({ go, notify, onSession }) {
                 </>
               )}
             </button>
-            <button type="button" className="btn btn-ghost" disabled={busy || resendIn > 0} onClick={() => sendCode()}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={busy || resendIn > 0}
+              onClick={() => sendCode()}
+            >
               <Icon name="refresh" size={15} /> Resend code
             </button>
             <button
               type="button"
               className="btn-link"
               onClick={() => {
-                setError('');
-                setStage('form');
+                setError("");
+                setStage("form");
               }}
             >
               <Icon name="left" size={14} /> Edit clinic details
@@ -3868,7 +4657,9 @@ function RegisterPage({ go, notify, onSession }) {
 
           <div className="auth-foot">
             <span>Wrong address?</span>
-            <span className="small muted">Go back, correct the admin email, and we will send a fresh code.</span>
+            <span className="small muted">
+              Go back, correct the admin email, and we will send a fresh code.
+            </span>
           </div>
         </form>
       </AuthShell>
@@ -3883,8 +4674,9 @@ function RegisterPage({ go, notify, onSession }) {
         </span>
         <h2>Register your clinic</h2>
         <p className="lead">
-          We email a 6-digit code to your admin address to confirm it is yours. After verification your clinic is listed
-          publicly and your dashboard opens immediately.
+          We email a 6-digit code to your admin address to confirm it is yours.
+          After verification your clinic is listed publicly and your dashboard
+          opens immediately.
         </p>
 
         <div className="form-grid">
@@ -3892,7 +4684,13 @@ function RegisterPage({ go, notify, onSession }) {
             <label>
               Clinic name <span className="req">*</span>
             </label>
-            <input className="input" required value={form.clinicName} onChange={(e) => set('clinicName', e.target.value)} placeholder="e.g. Maa Tripura Sundari Seva Sadan" />
+            <input
+              className="input"
+              required
+              value={form.clinicName}
+              onChange={(e) => set("clinicName", e.target.value)}
+              placeholder="e.g. Maa Tripura Sundari Seva Sadan"
+            />
           </div>
 
           <div className="grid2">
@@ -3900,13 +4698,24 @@ function RegisterPage({ go, notify, onSession }) {
               <label>
                 Doctor name <span className="req">*</span>
               </label>
-              <input className="input" required value={form.doctorName} onChange={(e) => set('doctorName', e.target.value)} placeholder="Dr. C S Gupta (MBBS)" />
+              <input
+                className="input"
+                required
+                value={form.doctorName}
+                onChange={(e) => set("doctorName", e.target.value)}
+                placeholder="Dr. C S Gupta (MBBS)"
+              />
             </div>
             <div className="field">
               <label>
                 Specialization <span className="req">*</span>
               </label>
-              <select className="select" required value={form.specialization} onChange={(e) => set('specialization', e.target.value)}>
+              <select
+                className="select"
+                required
+                value={form.specialization}
+                onChange={(e) => set("specialization", e.target.value)}
+              >
                 {SPECIALIZATIONS.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -3920,13 +4729,25 @@ function RegisterPage({ go, notify, onSession }) {
             <label>
               Clinic address <span className="req">*</span>
             </label>
-            <textarea className="textarea" required rows="2" value={form.address} onChange={(e) => set('address', e.target.value)} placeholder="Street, area, landmark" />
+            <textarea
+              className="textarea"
+              required
+              rows="2"
+              value={form.address}
+              onChange={(e) => set("address", e.target.value)}
+              placeholder="Street, area, landmark"
+            />
           </div>
 
           <div className="grid2">
             <div className="field">
               <label>City</label>
-              <input className="input" value={form.city} onChange={(e) => set('city', e.target.value)} placeholder="e.g. Ballia" />
+              <input
+                className="input"
+                value={form.city}
+                onChange={(e) => set("city", e.target.value)}
+                placeholder="e.g. Ballia"
+              />
             </div>
             <div className="field">
               <label>
@@ -3937,7 +4758,9 @@ function RegisterPage({ go, notify, onSession }) {
                 required
                 inputMode="numeric"
                 value={form.phone}
-                onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                onChange={(e) =>
+                  set("phone", e.target.value.replace(/\D/g, "").slice(0, 10))
+                }
                 placeholder="10-digit number"
               />
             </div>
@@ -3945,7 +4768,12 @@ function RegisterPage({ go, notify, onSession }) {
 
           <div className="field">
             <label>Opening hours</label>
-            <input className="input" value={form.timings} onChange={(e) => set('timings', e.target.value)} placeholder="Mon-Sat, 9 AM - 6 PM" />
+            <input
+              className="input"
+              value={form.timings}
+              onChange={(e) => set("timings", e.target.value)}
+              placeholder="Mon-Sat, 9 AM - 6 PM"
+            />
           </div>
 
           <div className="field">
@@ -3953,8 +4781,8 @@ function RegisterPage({ go, notify, onSession }) {
               value={form.photo}
               hint="Optional. Appears on your public listing, your booking page and your QR card."
               onChange={(url, key) => {
-                set('photo', url);
-                set('photoKey', key);
+                set("photo", url);
+                set("photoKey", key);
               }}
             />
           </div>
@@ -3970,18 +4798,34 @@ function RegisterPage({ go, notify, onSession }) {
                 className="input"
                 required
                 value={form.adminUserId}
-                onChange={(e) => set('adminUserId', e.target.value.replace(/[^a-zA-Z0-9_.]/g, '').slice(0, 24))}
+                onChange={(e) =>
+                  set(
+                    "adminUserId",
+                    e.target.value.replace(/[^a-zA-Z0-9_.]/g, "").slice(0, 24),
+                  )
+                }
                 placeholder="mtss.admin"
                 autoComplete="username"
               />
-              <span className="hint">4-24 characters: letters, numbers, dot or underscore.</span>
+              <span className="hint">
+                4-24 characters: letters, numbers, dot or underscore.
+              </span>
             </div>
             <div className="field">
               <label>
                 Admin email <span className="req">*</span>
               </label>
-              <input className="input" required type="email" value={form.adminEmail} onChange={(e) => set('adminEmail', e.target.value)} placeholder="clinic@example.com" />
-              <span className="hint">Verified with a code now, and used for password resets.</span>
+              <input
+                className="input"
+                required
+                type="email"
+                value={form.adminEmail}
+                onChange={(e) => set("adminEmail", e.target.value)}
+                placeholder="clinic@example.com"
+              />
+              <span className="hint">
+                Verified with a code now, and used for password resets.
+              </span>
             </div>
           </div>
 
@@ -3996,7 +4840,7 @@ function RegisterPage({ go, notify, onSession }) {
                 type="password"
                 minLength="6"
                 value={form.password}
-                onChange={(e) => set('password', e.target.value)}
+                onChange={(e) => set("password", e.target.value)}
                 autoComplete="new-password"
                 placeholder="At least 6 characters"
               />
@@ -4006,11 +4850,14 @@ function RegisterPage({ go, notify, onSession }) {
                 Confirm password <span className="req">*</span>
               </label>
               <input
-                className={'input' + (form.confirm && form.confirm !== form.password ? ' bad' : '')}
+                className={
+                  "input" +
+                  (form.confirm && form.confirm !== form.password ? " bad" : "")
+                }
                 required
                 type="password"
                 value={form.confirm}
-                onChange={(e) => set('confirm', e.target.value)}
+                onChange={(e) => set("confirm", e.target.value)}
                 autoComplete="new-password"
                 placeholder="Repeat password"
               />
@@ -4040,7 +4887,11 @@ function RegisterPage({ go, notify, onSession }) {
 
         <div className="auth-foot">
           <span>Already registered?</span>
-          <button type="button" className="btn-link" onClick={() => go('/login')}>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => go("/login")}
+          >
             Sign in instead <Icon name="right" size={14} />
           </button>
         </div>
@@ -4050,23 +4901,23 @@ function RegisterPage({ go, notify, onSession }) {
 }
 
 function LoginPage({ go, notify, onSession }) {
-  const [form, setForm] = useState({ adminUserId: '', password: '' });
+  const [form, setForm] = useState({ adminUserId: "", password: "" });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/auth/login', { method: 'POST', body: form });
+    setError("");
+    const data = await api("/auth/login", { method: "POST", body: form });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
       return;
     }
     onSession(data.token, data.clinic);
-    notify(data.message, 'ok');
-    go('/admin/' + data.clinic.clinicId);
+    notify(data.message, "ok");
+    go("/admin/" + data.clinic.clinicId);
   };
 
   return (
@@ -4076,7 +4927,9 @@ function LoginPage({ go, notify, onSession }) {
           <Icon name="shield" size={13} /> Clinic admin
         </span>
         <h2>Sign in to your dashboard</h2>
-        <p className="lead">Use the admin user ID and password you chose during registration.</p>
+        <p className="lead">
+          Use the admin user ID and password you chose during registration.
+        </p>
 
         <div className="form-grid">
           <div className="field">
@@ -4087,7 +4940,9 @@ function LoginPage({ go, notify, onSession }) {
                 className="input"
                 required
                 value={form.adminUserId}
-                onChange={(e) => setForm({ ...form, adminUserId: e.target.value })}
+                onChange={(e) =>
+                  setForm({ ...form, adminUserId: e.target.value })
+                }
                 placeholder="your.user.id"
                 autoComplete="username"
               />
@@ -4131,10 +4986,18 @@ function LoginPage({ go, notify, onSession }) {
         </div>
 
         <div className="auth-foot">
-          <button type="button" className="btn-link" onClick={() => go('/forgot')}>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => go("/forgot")}
+          >
             Forgot password?
           </button>
-          <button type="button" className="btn-link" onClick={() => go('/register')}>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => go("/register")}
+          >
             Register a clinic <Icon name="right" size={14} />
           </button>
         </div>
@@ -4144,14 +5007,15 @@ function LoginPage({ go, notify, onSession }) {
 }
 
 function ForgotPage({ go, notify, onSession }) {
-  const [stage, setStage] = useState('request');
-  const [form, setForm] = useState({ identifier: '', code: '', password: '' });
+  const [stage, setStage] = useState("request");
+  const [form, setForm] = useState({ identifier: "", code: "", password: "" });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [sentTo, setSentTo] = useState('');
+  const [error, setError] = useState("");
+  const [sentTo, setSentTo] = useState("");
   const [resendIn, setResendIn] = useState(0);
 
-  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const set = (key, value) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
   useEffect(() => {
     if (resendIn <= 0) return undefined;
@@ -4164,26 +5028,33 @@ function ForgotPage({ go, notify, onSession }) {
   const request = async (event) => {
     if (event && event.preventDefault) event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/auth/forgot-password', { method: 'POST', body: { identifier: form.identifier } });
+    setError("");
+    const data = await api("/auth/forgot-password", {
+      method: "POST",
+      body: { identifier: form.identifier },
+    });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
       return;
     }
-    setSentTo(data.sentTo || '');
+    setSentTo(data.sentTo || "");
     setResendIn(45);
-    notify(data.message, 'ok');
-    setStage('reset');
+    notify(data.message, "ok");
+    setStage("reset");
   };
 
   const reset = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/auth/reset-password', {
-      method: 'POST',
-      body: { identifier: form.identifier, code: form.code, password: form.password },
+    setError("");
+    const data = await api("/auth/reset-password", {
+      method: "POST",
+      body: {
+        identifier: form.identifier,
+        code: form.code,
+        password: form.password,
+      },
     });
     setBusy(false);
     if (!data.success) {
@@ -4191,24 +5062,33 @@ function ForgotPage({ go, notify, onSession }) {
       return;
     }
     onSession(data.token, data.clinic);
-    notify(data.message, 'ok');
-    go('/admin/' + data.clinic.clinicId);
+    notify(data.message, "ok");
+    go("/admin/" + data.clinic.clinicId);
   };
 
   return (
     <AuthShell go={go} mode="forgot">
-      <form className="auth-card" onSubmit={stage === 'request' ? request : reset} noValidate>
+      <form
+        className="auth-card"
+        onSubmit={stage === "request" ? request : reset}
+        noValidate
+      >
         <span className="eyebrow">
-          <Icon name="mail" size={13} /> Step {stage === 'request' ? '1' : '2'} of 2
+          <Icon name="mail" size={13} /> Step {stage === "request" ? "1" : "2"}{" "}
+          of 2
         </span>
-        <h2>{stage === 'request' ? 'Request a reset code' : 'Choose a new password'}</h2>
+        <h2>
+          {stage === "request"
+            ? "Request a reset code"
+            : "Choose a new password"}
+        </h2>
         <p className="lead">
-          {stage === 'request'
-            ? 'Enter your admin user ID or the admin email you registered with. A 6-digit code is emailed to that address.'
-            : 'Enter the 6-digit code from your email along with a new password. The code expires in 15 minutes.'}
+          {stage === "request"
+            ? "Enter your admin user ID or the admin email you registered with. A 6-digit code is emailed to that address."
+            : "Enter the 6-digit code from your email along with a new password. The code expires in 15 minutes."}
         </p>
 
-        {stage === 'reset' && sentTo ? (
+        {stage === "reset" && sentTo ? (
           <Alert kind="info">
             Code sent to <b>{sentTo}</b> - valid for 15 minutes.
           </Alert>
@@ -4223,13 +5103,13 @@ function ForgotPage({ go, notify, onSession }) {
               className="input"
               required
               value={form.identifier}
-              onChange={(e) => set('identifier', e.target.value)}
+              onChange={(e) => set("identifier", e.target.value)}
               placeholder="mtss.admin or clinic@example.com"
               autoComplete="username"
             />
           </div>
 
-          {stage === 'reset' ? (
+          {stage === "reset" ? (
             <>
               <div className="field">
                 <label>6-digit reset code</label>
@@ -4238,7 +5118,9 @@ function ForgotPage({ go, notify, onSession }) {
                   required
                   inputMode="numeric"
                   value={form.code}
-                  onChange={(e) => set('code', e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  onChange={(e) =>
+                    set("code", e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
                   placeholder="000000"
                 />
               </div>
@@ -4250,7 +5132,7 @@ function ForgotPage({ go, notify, onSession }) {
                   type="password"
                   minLength="6"
                   value={form.password}
-                  onChange={(e) => set('password', e.target.value)}
+                  onChange={(e) => set("password", e.target.value)}
                   placeholder="At least 6 characters"
                   autoComplete="new-password"
                 />
@@ -4271,7 +5153,7 @@ function ForgotPage({ go, notify, onSession }) {
               <>
                 <Spinner /> Please wait...
               </>
-            ) : stage === 'request' ? (
+            ) : stage === "request" ? (
               <>
                 Email me a code <Icon name="right" size={17} />
               </>
@@ -4281,8 +5163,12 @@ function ForgotPage({ go, notify, onSession }) {
               </>
             )}
           </button>
-          {stage === 'reset' ? (
-            <button type="button" className="btn btn-ghost" onClick={() => setStage('request')}>
+          {stage === "reset" ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setStage("request")}
+            >
               <Icon name="left" size={15} /> Send another code
             </button>
           ) : null}
@@ -4290,7 +5176,11 @@ function ForgotPage({ go, notify, onSession }) {
 
         <div className="auth-foot">
           <span>Remembered it?</span>
-          <button type="button" className="btn-link" onClick={() => go('/login')}>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => go("/login")}
+          >
             Back to sign in
           </button>
         </div>
@@ -4305,16 +5195,16 @@ function ForgotPage({ go, notify, onSession }) {
  * ========================================================================== */
 
 function QueueTrackPage({ clinicId, go }) {
-  const [mode, setMode] = useState('mobile');
-  const [value, setValue] = useState('');
+  const [mode, setMode] = useState("mobile");
+  const [value, setValue] = useState("");
   const [rows, setRows] = useState(null);
   const [picked, setPicked] = useState(null);
   const [clinics, setClinics] = useState([]);
-  const [boardId, setBoardId] = useState(clinicId || '');
+  const [boardId, setBoardId] = useState(clinicId || "");
   const [board, setBoard] = useState(null);
   const [busy, setBusy] = useState(false);
   const [boardBusy, setBoardBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [auto, setAuto] = useState(true);
   const [tick, setTick] = useState(Date.now());
   const [beat, setBeat] = useState(0);
@@ -4323,10 +5213,10 @@ function QueueTrackPage({ clinicId, go }) {
      board to that booking's date so an old token is never compared against
      today's queue. */
   const tClinic = picked ? picked.clinicId : boardId;
-  const tDate = picked ? picked.date : '';
+  const tDate = picked ? picked.date : "";
 
   useEffect(() => {
-    api('/clinics').then((data) => {
+    api("/clinics").then((data) => {
       if (data.success) setClinics(data.clinics || []);
     });
   }, []);
@@ -4335,20 +5225,22 @@ function QueueTrackPage({ clinicId, go }) {
     async (silent) => {
       if (!tClinic) return undefined;
       if (!silent) setBoardBusy(true);
-      const query = tDate ? '?date=' + encodeURIComponent(tDate) : '';
-      const data = await api('/clinics/' + encodeURIComponent(tClinic) + '/live' + query);
+      const query = tDate ? "?date=" + encodeURIComponent(tDate) : "";
+      const data = await api(
+        "/clinics/" + encodeURIComponent(tClinic) + "/live" + query,
+      );
       if (!silent) setBoardBusy(false);
       if (!data.success) {
         setError(data.message);
         setBoard(null);
         return undefined;
       }
-      setError('');
+      setError("");
       setBoard(data);
       setBeat(Date.now());
       return undefined;
     },
-    [tClinic, tDate]
+    [tClinic, tDate],
   );
 
   useEffect(() => {
@@ -4362,7 +5254,9 @@ function QueueTrackPage({ clinicId, go }) {
      DIRECTLY - no refetch round trip, no flicker. */
   const socketLive = useQueueSocket(tClinic, tDate, (payload) => {
     if (!payload || !payload.live) return;
-    setBoard((prev) => (prev ? Object.assign({}, prev, { live: payload.live }) : prev));
+    setBoard((prev) =>
+      prev ? Object.assign({}, prev, { live: payload.live }) : prev,
+    );
     setBeat(Date.now());
   });
 
@@ -4370,7 +5264,10 @@ function QueueTrackPage({ clinicId, go }) {
      deployment where socket.io is not installed on the backend. */
   useEffect(() => {
     if (!auto || !tClinic) return undefined;
-    const id = window.setInterval(() => loadBoard(true), socketLive ? 45000 : 15000);
+    const id = window.setInterval(
+      () => loadBoard(true),
+      socketLive ? 45000 : 15000,
+    );
     return () => window.clearInterval(id);
   }, [auto, tClinic, loadBoard, socketLive]);
 
@@ -4382,10 +5279,10 @@ function QueueTrackPage({ clinicId, go }) {
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
+    setError("");
     const params = new URLSearchParams();
     params.set(mode, value.trim());
-    const data = await api('/lookup?' + params.toString());
+    const data = await api("/lookup?" + params.toString());
     setBusy(false);
     if (!data.success) {
       setError(data.message);
@@ -4396,7 +5293,11 @@ function QueueTrackPage({ clinicId, go }) {
     const list = data.appointments || [];
     setRows(list);
     const today = todayISO();
-    setPicked(list.find((row) => row.date === today && row.status !== 'cancelled') || list[0] || null);
+    setPicked(
+      list.find((row) => row.date === today && row.status !== "cancelled") ||
+        list[0] ||
+        null,
+    );
   };
 
   const live = board ? board.live : null;
@@ -4408,7 +5309,9 @@ function QueueTrackPage({ clinicId, go }) {
      or an emergency case is seen out of order. */
   const ahead =
     live && myToken
-      ? live.tokens.filter((row) => row.status === 'booked' && row.bookingNumber < myToken).length
+      ? live.tokens.filter(
+          (row) => row.status === "booked" && row.bookingNumber < myToken,
+        ).length
       : 0;
   const etaMin = ahead * pace;
   const etaAt = new Date(tick + etaMin * 60000);
@@ -4416,43 +5319,59 @@ function QueueTrackPage({ clinicId, go }) {
   const isToday = picked ? picked.date === todayISO() : true;
 
   const startAhead = myToken ? Math.max(1, myToken - 1) : 1;
-  const ringPct = myToken ? Math.max(0, Math.min(100, Math.round(((startAhead - ahead) / startAhead) * 100))) : 0;
+  const ringPct = myToken
+    ? Math.max(
+        0,
+        Math.min(100, Math.round(((startAhead - ahead) / startAhead) * 100)),
+      )
+    : 0;
 
-  let state = 'wait';
-  let stateMsg = '';
+  let state = "wait";
+  let stateMsg = "";
   if (picked) {
-    if (picked.status === 'cancelled') {
-      state = 'void';
-      stateMsg = 'This booking was cancelled. Please book a fresh appointment.';
-    } else if (picked.status === 'visited') {
-      state = 'done';
-      stateMsg = 'Token ' + myToken + ' has already been seen by the doctor.';
+    if (picked.status === "cancelled") {
+      state = "void";
+      stateMsg = "This booking was cancelled. Please book a fresh appointment.";
+    } else if (picked.status === "visited") {
+      state = "done";
+      stateMsg = "Token " + myToken + " has already been seen by the doctor.";
     } else if (!isToday) {
-      state = 'wait';
-      stateMsg = 'This token is for ' + picked.dateLabel + '. Live tracking starts on the day of your appointment.';
+      state = "wait";
+      stateMsg =
+        "This token is for " +
+        picked.dateLabel +
+        ". Live tracking starts on the day of your appointment.";
     } else if (!live || !live.currentToken) {
-      state = 'wait';
-      stateMsg = 'The doctor has not called the first token yet. This page updates the moment token 1 is called.';
+      state = "wait";
+      stateMsg =
+        "The doctor has not called the first token yet. This page updates the moment token 1 is called.";
     } else if (ahead === 0) {
-      state = 'turn';
-      stateMsg = 'You are next. Please wait right outside the consultation room.';
+      state = "turn";
+      stateMsg =
+        "You are next. Please wait right outside the consultation room.";
     } else if (ahead <= 2) {
-      state = 'soon';
-      stateMsg = 'Almost your turn - only ' + ahead + (ahead === 1 ? ' patient is' : ' patients are') + ' ahead of you.';
+      state = "soon";
+      stateMsg =
+        "Almost your turn - only " +
+        ahead +
+        (ahead === 1 ? " patient is" : " patients are") +
+        " ahead of you.";
     } else {
-      stateMsg = ahead + ' patients are ahead of you. Keep this page open, it refreshes itself.';
+      stateMsg =
+        ahead +
+        " patients are ahead of you. Keep this page open, it refreshes itself.";
     }
   }
 
   const pebbleClass = (row) => {
-    const bits = ['lq-peb'];
-    if (row.status === 'cancelled') bits.push('void');
-    else if (row.status === 'visited') bits.push('done');
-    else if (row.quota === 'Emergency') bits.push('emg');
-    else bits.push('wait');
-    if (live && row.bookingNumber === live.currentToken) bits.push('now');
-    if (myToken && row.bookingNumber === myToken) bits.push('mine');
-    return bits.join(' ');
+    const bits = ["lq-peb"];
+    if (row.status === "cancelled") bits.push("void");
+    else if (row.status === "visited") bits.push("done");
+    else if (row.quota === "Emergency") bits.push("emg");
+    else bits.push("wait");
+    if (live && row.bookingNumber === live.currentToken) bits.push("now");
+    if (myToken && row.bookingNumber === myToken) bits.push("mine");
+    return bits.join(" ");
   };
 
   const liveHero = live ? (
@@ -4460,27 +5379,38 @@ function QueueTrackPage({ clinicId, go }) {
       <div className="lq-hero-in">
         <div className="lq-dial">
           <div>
-            <b>{live.currentToken ? String(live.currentToken).padStart(2, '0') : '--'}</b>
+            <b>
+              {live.currentToken
+                ? String(live.currentToken).padStart(2, "0")
+                : "--"}
+            </b>
             <small>Now serving</small>
           </div>
         </div>
         <div className="lq-hero-txt">
           <span className="lq-live">
-            <span className={'lq-dot' + (auto ? '' : ' off')} />
-            {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
-            {beat ? ' - updated ' + agoSec + 's ago' : ''}
+            <span className={"lq-dot" + (auto ? "" : " off")} />
+            {socketLive
+              ? "Live - realtime"
+              : auto
+                ? "Live - polling"
+                : "Paused"}
+            {beat ? " - updated " + agoSec + "s ago" : ""}
           </span>
           <h2 style={{ marginTop: 8 }}>
-            {live.currentToken ? 'Token ' + live.currentToken + ' is with the doctor' : 'Consultations have not started'}
+            {live.currentToken
+              ? "Token " + live.currentToken + " is with the doctor"
+              : "Consultations have not started"}
           </h2>
           <p>
             {board.clinic.clinicName}
-            {board.clinic.doctorName ? ' - ' + board.clinic.doctorName : ''}
-            {live.dateLabel ? ' - ' + live.dateLabel : ''}
+            {board.clinic.doctorName ? " - " + board.clinic.doctorName : ""}
+            {live.dateLabel ? " - " + live.dateLabel : ""}
           </p>
           <div className="lq-pills">
             <span className="lq-pill">
-              <Icon name="right" size={14} /> Up next <b>{live.nextToken ? '#' + live.nextToken : '--'}</b>
+              <Icon name="right" size={14} /> Up next{" "}
+              <b>{live.nextToken ? "#" + live.nextToken : "--"}</b>
             </span>
             <span className="lq-pill">
               <Icon name="clock" size={14} /> Waiting <b>{live.waiting}</b>
@@ -4492,7 +5422,8 @@ function QueueTrackPage({ clinicId, go }) {
               <Icon name="activity" size={14} /> Pace <b>{pace} min</b>
             </span>
             <span className="lq-pill">
-              <Icon name="ticket" size={14} /> Tokens today <b>{live.maxToken || 0}</b>
+              <Icon name="ticket" size={14} /> Tokens today{" "}
+              <b>{live.maxToken || 0}</b>
             </span>
           </div>
         </div>
@@ -4506,19 +5437,26 @@ function QueueTrackPage({ clinicId, go }) {
         <div className="row-between" style={{ marginBottom: 6 }}>
           <div>
             <h3 style={{ fontSize: 16, margin: 0 }}>Whole queue at a glance</h3>
-            <p className="small muted" style={{ margin: '4px 0 0' }}>
+            <p className="small muted" style={{ margin: "4px 0 0" }}>
               Green is done, blue is waiting, red is an emergency case.
-              {myToken ? ' Your token has a purple ring.' : ''}
+              {myToken ? " Your token has a purple ring." : ""}
             </p>
           </div>
-          <button className={'lq-toggle' + (auto ? ' on' : '')} onClick={() => setAuto((flag) => !flag)}>
-            <span className={'lq-dot' + (auto ? '' : ' off')} /> {auto ? 'Auto' : 'Paused'}
+          <button
+            className={"lq-toggle" + (auto ? " on" : "")}
+            onClick={() => setAuto((flag) => !flag)}
+          >
+            <span className={"lq-dot" + (auto ? "" : " off")} />{" "}
+            {auto ? "Auto" : "Paused"}
           </button>
         </div>
         <div className="tk-strip">
           {live.tokens.map((row) => (
             <div className="lq-cell" key={row.bookingNumber}>
-              <div className={pebbleClass(row)} title={'Token ' + row.bookingNumber + ' - ' + row.status}>
+              <div
+                className={pebbleClass(row)}
+                title={"Token " + row.bookingNumber + " - " + row.status}
+              >
                 <span>{row.bookingNumber}</span>
               </div>
             </div>
@@ -4528,8 +5466,8 @@ function QueueTrackPage({ clinicId, go }) {
     ) : null;
 
   return (
-    <div className="container pg" style={{ padding: '34px 22px 80px' }}>
-      <button className="crumb" onClick={() => go('/')}>
+    <div className="container pg" style={{ padding: "34px 22px 80px" }}>
+      <button className="crumb" onClick={() => go("/")}>
         <Icon name="left" size={15} /> Back to clinics
       </button>
 
@@ -4537,30 +5475,37 @@ function QueueTrackPage({ clinicId, go }) {
         <span className="eyebrow">
           <Icon name="activity" size={13} /> Live token queue
         </span>
-        <h1 style={{ fontSize: 'clamp(26px,4vw,38px)', margin: '12px 0 10px' }}>Which token is the doctor on?</h1>
+        <h1 style={{ fontSize: "clamp(26px,4vw,38px)", margin: "12px 0 10px" }}>
+          Which token is the doctor on?
+        </h1>
         <p className="muted">
-          No account needed. Enter the mobile number you booked with to track your own token, or just watch any clinic
-          queue move in real time.
+          No account needed. Enter the mobile number you booked with to track
+          your own token, or just watch any clinic queue move in real time.
         </p>
       </div>
 
       <Reveal>
-        <form className="card card-pad" onSubmit={submit} noValidate style={{ marginBottom: 20 }}>
+        <form
+          className="card card-pad"
+          onSubmit={submit}
+          noValidate
+          style={{ marginBottom: 20 }}
+        >
           <div className="row" style={{ marginBottom: 14 }}>
             {[
-              ['mobile', 'Mobile number'],
-              ['bookingId', 'Booking ID'],
+              ["mobile", "Mobile number"],
+              ["bookingId", "Booking ID"],
             ].map(([id, label]) => (
               <button
                 type="button"
                 key={id}
-                className={'chip' + (mode === id ? ' on' : '')}
+                className={"chip" + (mode === id ? " on" : "")}
                 onClick={() => {
                   setMode(id);
-                  setValue('');
+                  setValue("");
                   setRows(null);
                   setPicked(null);
-                  setError('');
+                  setError("");
                 }}
               >
                 {label}
@@ -4570,36 +5515,49 @@ function QueueTrackPage({ clinicId, go }) {
 
           <div className="row" style={{ gap: 10 }}>
             <div className="input-icon grow">
-              <Icon name={mode === 'mobile' ? 'phone' : 'ticket'} size={17} />
+              <Icon name={mode === "mobile" ? "phone" : "ticket"} size={17} />
               <input
                 className="input"
                 required
                 value={value}
                 onChange={(event) =>
                   setValue(
-                    mode === 'mobile' ? event.target.value.replace(/\D/g, '').slice(0, 10) : event.target.value.toUpperCase()
+                    mode === "mobile"
+                      ? event.target.value.replace(/\D/g, "").slice(0, 10)
+                      : event.target.value.toUpperCase(),
                   )
                 }
-                placeholder={mode === 'mobile' ? '10-digit mobile number' : 'MCF-XXXXXX-XXXXXX'}
-                inputMode={mode === 'mobile' ? 'numeric' : 'text'}
+                placeholder={
+                  mode === "mobile"
+                    ? "10-digit mobile number"
+                    : "MCF-XXXXXX-XXXXXX"
+                }
+                inputMode={mode === "mobile" ? "numeric" : "text"}
               />
             </div>
-            <button className="btn btn-primary" disabled={busy || !value.trim()}>
-              {busy ? <Spinner /> : <Icon name="search" size={16} />} Track my token
+            <button
+              className="btn btn-primary"
+              disabled={busy || !value.trim()}
+            >
+              {busy ? <Spinner /> : <Icon name="search" size={16} />} Track my
+              token
             </button>
           </div>
 
-          <div className="row" style={{ gap: 10, marginTop: 16, alignItems: 'center' }}>
-            <span className="small muted" style={{ whiteSpace: 'nowrap' }}>
+          <div
+            className="row"
+            style={{ gap: 10, marginTop: 16, alignItems: "center" }}
+          >
+            <span className="small muted" style={{ whiteSpace: "nowrap" }}>
               or watch a clinic
             </span>
             <select
               className="input grow"
-              value={picked ? '' : boardId}
+              value={picked ? "" : boardId}
               onChange={(event) => {
                 setPicked(null);
                 setRows(null);
-                setError('');
+                setError("");
                 setBoardId(event.target.value);
               }}
             >
@@ -4607,7 +5565,7 @@ function QueueTrackPage({ clinicId, go }) {
               {clinics.map((clinic) => (
                 <option key={clinic.clinicId} value={clinic.clinicId}>
                   {clinic.clinicName}
-                  {clinic.doctorName ? ' - ' + clinic.doctorName : ''}
+                  {clinic.doctorName ? " - " + clinic.doctorName : ""}
                 </option>
               ))}
             </select>
@@ -4623,17 +5581,22 @@ function QueueTrackPage({ clinicId, go }) {
 
       {rows && rows.length > 1 ? (
         <div className="card card-pad" style={{ marginBottom: 20 }}>
-          <h3 style={{ fontSize: 15, margin: '0 0 12px' }}>
+          <h3 style={{ fontSize: 15, margin: "0 0 12px" }}>
             {rows.length} bookings found - pick the one to track
           </h3>
           <div className="track-list">
             {rows.map((row) => (
               <button
                 key={row.bookingId}
-                className={'tk-mini' + (picked && picked.bookingId === row.bookingId ? ' on' : '')}
+                className={
+                  "tk-mini" +
+                  (picked && picked.bookingId === row.bookingId ? " on" : "")
+                }
                 onClick={() => setPicked(row)}
               >
-                <span className="tk-tok">{String(row.bookingNumber).padStart(2, '0')}</span>
+                <span className="tk-tok">
+                  {String(row.bookingNumber).padStart(2, "0")}
+                </span>
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <b>{row.clinicName}</b>
                   <small>
@@ -4654,7 +5617,8 @@ function QueueTrackPage({ clinicId, go }) {
           </div>
           <h4>No bookings found</h4>
           <p className="muted small">
-            Check the mobile number or booking ID. Records older than 15 days are cleared automatically.
+            Check the mobile number or booking ID. Records older than 15 days
+            are cleared automatically.
           </p>
         </div>
       ) : null}
@@ -4668,58 +5632,75 @@ function QueueTrackPage({ clinicId, go }) {
               <span className="eyebrow">
                 <Icon name="ticket" size={13} /> Your token
               </span>
-              <div className="tk-ring" style={{ '--p': ringPct }}>
+              <div className="tk-ring" style={{ "--p": ringPct }}>
                 <div className="tk-ring-in">
-                  <b>{String(myToken).padStart(2, '0')}</b>
+                  <b>{String(myToken).padStart(2, "0")}</b>
                   <small>{picked.quota}</small>
                 </div>
               </div>
 
-              <h3 style={{ fontSize: 18, margin: '0 0 4px' }}>{picked.name}</h3>
+              <h3 style={{ fontSize: 18, margin: "0 0 4px" }}>{picked.name}</h3>
               <p className="small muted" style={{ margin: 0 }}>
                 {picked.clinicName} - {picked.dateLabel}
               </p>
 
               <div className="tk-eta">
                 <div>
-                  <b>{live.currentToken || '--'}</b>
+                  <b>{live.currentToken || "--"}</b>
                   <small>Now serving</small>
                 </div>
                 <div>
-                  <b>{picked.status === 'booked' && isToday ? ahead : '--'}</b>
+                  <b>{picked.status === "booked" && isToday ? ahead : "--"}</b>
                   <small>Ahead of you</small>
                 </div>
                 <div>
                   <b>
-                    {picked.status === 'booked' && isToday
+                    {picked.status === "booked" && isToday
                       ? etaMin === 0
-                        ? 'Now'
-                        : '~' + etaMin + 'm'
-                      : '--'}
+                        ? "Now"
+                        : "~" + etaMin + "m"
+                      : "--"}
                   </b>
                   <small>Your turn</small>
                 </div>
               </div>
 
-              <div className={'tk-state ' + state}>
+              <div className={"tk-state " + state}>
                 <Icon
-                  name={state === 'turn' ? 'spark' : state === 'void' ? 'ban' : state === 'done' ? 'check' : 'clock'}
+                  name={
+                    state === "turn"
+                      ? "spark"
+                      : state === "void"
+                        ? "ban"
+                        : state === "done"
+                          ? "check"
+                          : "clock"
+                  }
                   size={17}
                 />
                 <span>{stateMsg}</span>
               </div>
 
-              {picked.status === 'booked' && isToday && etaMin > 0 ? (
+              {picked.status === "booked" && isToday && etaMin > 0 ? (
                 <p className="small muted" style={{ marginTop: 12 }}>
-                  Estimated call time around{' '}
-                  <b>{etaAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b>, based on{' '}
-                  {live.paceSamples ? 'the doctor averaging ' + pace + ' min per patient today' : 'a ' + pace + ' min average'}.
-                  Please arrive earlier, since emergency cases can move the queue.
+                  Estimated call time around{" "}
+                  <b>
+                    {etaAt.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </b>
+                  , based on{" "}
+                  {live.paceSamples
+                    ? "the doctor averaging " + pace + " min per patient today"
+                    : "a " + pace + " min average"}
+                  . Please arrive earlier, since emergency cases can move the
+                  queue.
                 </p>
               ) : null}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
               {liveHero}
               {strip}
             </div>
@@ -4729,14 +5710,15 @@ function QueueTrackPage({ clinicId, go }) {
 
       {!picked && live ? (
         <Reveal>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
             {liveHero}
             {strip}
             <div className="lq-tip">
               <Icon name="spark" size={16} />
               <span>
-                Want your own position and a time estimate? Enter the mobile number you booked with above and this board
-                will follow your token instead.
+                Want your own position and a time estimate? Enter the mobile
+                number you booked with above and this board will follow your
+                token instead.
               </span>
             </div>
           </div>
@@ -4753,45 +5735,51 @@ function QueueTrackPage({ clinicId, go }) {
 
 function AdminDashboard({ routeClinicId, go, notify }) {
   const [clinic, setClinic] = useState(getStoredClinic());
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState("overview");
   const [date, setDate] = useState(todayISO());
   const [stats, setStats] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [rows, setRows] = useState([]);
-  const [filters, setFilters] = useState({ search: '', status: '', quota: '', source: '' });
-  const [range, setRange] = useState({ startDate: '', endDate: '' });
+  const [filters, setFilters] = useState({
+    search: "",
+    status: "",
+    quota: "",
+    source: "",
+  });
+  const [range, setRange] = useState({ startDate: "", endDate: "" });
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [sidebar, setSidebar] = useState(false);
   const [walkOpen, setWalkOpen] = useState(false);
   const [detail, setDetail] = useState(null);
-  const [busyId, setBusyId] = useState('');
+  const [busyId, setBusyId] = useState("");
   // Drill-down dialog. Opened by clicking any overview stat card or analytics
   // tile; holds the exact appointment subset that the clicked card counts.
   const [drill, setDrill] = useState(null);
 
   const signOut = useCallback(
     (message) => {
-      setToken('');
+      setToken("");
       setStoredClinic(null);
-      if (message) notify(message, 'err');
-      go('/login');
+      if (message) notify(message, "err");
+      go("/login");
     },
-    [go, notify]
+    [go, notify],
   );
 
   /* -- session ---------------------------------------------------------- */
   useEffect(() => {
     if (!getToken()) {
-      go('/login');
+      go("/login");
       return undefined;
     }
     let alive = true;
-    api('/auth/me', { auth: true }).then((data) => {
+    api("/auth/me", { auth: true }).then((data) => {
       if (!alive) return;
       if (!data.success) {
-        if (data.unauthorized) signOut('Your session expired. Please sign in again.');
+        if (data.unauthorized)
+          signOut("Your session expired. Please sign in again.");
         else setError(data.message);
         setLoading(false);
         return;
@@ -4799,7 +5787,8 @@ function AdminDashboard({ routeClinicId, go, notify }) {
       setClinic(data.clinic);
       setStoredClinic(data.clinic);
       setLoading(false);
-      if (routeClinicId !== data.clinic.clinicId) go('/admin/' + data.clinic.clinicId);
+      if (routeClinicId !== data.clinic.clinicId)
+        go("/admin/" + data.clinic.clinicId);
     });
     return () => {
       alive = false;
@@ -4810,24 +5799,24 @@ function AdminDashboard({ routeClinicId, go, notify }) {
   const loadSummary = useCallback(async () => {
     if (!getToken()) return;
     const params = new URLSearchParams();
-    if (range.startDate) params.set('startDate', range.startDate);
-    if (range.endDate) params.set('endDate', range.endDate);
+    if (range.startDate) params.set("startDate", range.startDate);
+    if (range.endDate) params.set("endDate", range.endDate);
     const query = params.toString();
 
     const [statsData, analyticsData] = await Promise.all([
-      api('/admin/stats?date=' + encodeURIComponent(date), { auth: true }),
-      api('/admin/analytics' + (query ? '?' + query : ''), { auth: true }),
+      api("/admin/stats?date=" + encodeURIComponent(date), { auth: true }),
+      api("/admin/analytics" + (query ? "?" + query : ""), { auth: true }),
     ]);
 
     if (statsData.unauthorized || analyticsData.unauthorized) {
-      signOut('Your session expired. Please sign in again.');
+      signOut("Your session expired. Please sign in again.");
       return;
     }
     if (statsData.success) setStats(statsData);
     if (analyticsData.success) setAnalytics(analyticsData);
     if (!statsData.success) setError(statsData.message);
     else if (!analyticsData.success) setError(analyticsData.message);
-    else setError('');
+    else setError("");
   }, [date, range.startDate, range.endDate, signOut]);
 
   /* -- appointment rows -------------------------------------------------- */
@@ -4836,30 +5825,41 @@ function AdminDashboard({ routeClinicId, go, notify }) {
     setRowsLoading(true);
     const params = new URLSearchParams();
     if (range.startDate || range.endDate) {
-      if (range.startDate) params.set('startDate', range.startDate);
-      if (range.endDate) params.set('endDate', range.endDate);
+      if (range.startDate) params.set("startDate", range.startDate);
+      if (range.endDate) params.set("endDate", range.endDate);
     } else {
-      params.set('date', date);
+      params.set("date", date);
     }
-    if (filters.search.trim()) params.set('search', filters.search.trim());
-    if (filters.status) params.set('status', filters.status);
-    if (filters.quota) params.set('quota', filters.quota);
-    if (filters.source) params.set('source', filters.source);
+    if (filters.search.trim()) params.set("search", filters.search.trim());
+    if (filters.status) params.set("status", filters.status);
+    if (filters.quota) params.set("quota", filters.quota);
+    if (filters.source) params.set("source", filters.source);
 
-    const data = await api('/admin/appointments?' + params.toString(), { auth: true });
+    const data = await api("/admin/appointments?" + params.toString(), {
+      auth: true,
+    });
     if (data.unauthorized) {
-      signOut('Your session expired. Please sign in again.');
+      signOut("Your session expired. Please sign in again.");
       return;
     }
     if (data.success) {
       setRows(data.appointments || []);
-      setError('');
+      setError("");
     } else {
       setRows([]);
       setError(data.message);
     }
     setRowsLoading(false);
-  }, [date, filters.search, filters.status, filters.quota, filters.source, range.startDate, range.endDate, signOut]);
+  }, [
+    date,
+    filters.search,
+    filters.status,
+    filters.quota,
+    filters.source,
+    range.startDate,
+    range.endDate,
+    signOut,
+  ]);
 
   useEffect(() => {
     loadSummary();
@@ -4881,55 +5881,66 @@ function AdminDashboard({ routeClinicId, go, notify }) {
   const drillQuery = useCallback(
     (card) => {
       const params = new URLSearchParams();
-      if (card.scope === 'range') {
-        if (range.startDate) params.set('startDate', range.startDate);
-        if (range.endDate) params.set('endDate', range.endDate);
+      if (card.scope === "range") {
+        if (range.startDate) params.set("startDate", range.startDate);
+        if (range.endDate) params.set("endDate", range.endDate);
       } else {
-        params.set('date', date);
+        params.set("date", date);
       }
-      if (card.status) params.set('status', card.status);
-      if (card.quota) params.set('quota', card.quota);
-      if (card.source) params.set('source', card.source);
+      if (card.status) params.set("status", card.status);
+      if (card.quota) params.set("quota", card.quota);
+      if (card.source) params.set("source", card.source);
       return params.toString();
     },
-    [date, range.startDate, range.endDate]
+    [date, range.startDate, range.endDate],
   );
 
   const openDrill = useCallback(
     async (card) => {
-      setDrill(Object.assign({}, card, { list: [], loading: true, error: '' }));
-      const data = await api('/admin/appointments?' + drillQuery(card), { auth: true });
+      setDrill(Object.assign({}, card, { list: [], loading: true, error: "" }));
+      const data = await api("/admin/appointments?" + drillQuery(card), {
+        auth: true,
+      });
       if (data.unauthorized) {
-        signOut('Your session expired. Please sign in again.');
+        signOut("Your session expired. Please sign in again.");
         return;
       }
       setDrill(
         Object.assign({}, card, {
           list: data.success ? data.appointments || [] : [],
           loading: false,
-          error: data.success ? '' : data.message,
-        })
+          error: data.success ? "" : data.message,
+        }),
       );
     },
-    [drillQuery, signOut]
+    [drillQuery, signOut],
   );
 
   /* -- row actions ------------------------------------------------------- */
   const act = async (row, action) => {
     const id = row._id || row.id;
-    if (action === 'cancel' && !window.confirm('Cancel appointment #' + row.bookingNumber + ' for ' + row.name + '?')) return;
+    if (
+      action === "cancel" &&
+      !window.confirm(
+        "Cancel appointment #" + row.bookingNumber + " for " + row.name + "?",
+      )
+    )
+      return;
     setBusyId(id + action);
-    const data = await api('/admin/appointments/' + id + '/' + action, { method: 'PUT', auth: true });
-    setBusyId('');
+    const data = await api("/admin/appointments/" + id + "/" + action, {
+      method: "PUT",
+      auth: true,
+    });
+    setBusyId("");
     if (data.unauthorized) {
-      signOut('Your session expired. Please sign in again.');
+      signOut("Your session expired. Please sign in again.");
       return;
     }
     if (!data.success) {
-      notify(data.message, 'err');
+      notify(data.message, "err");
       return;
     }
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     setDetail(null);
     refreshAll();
     if (drill) openDrill(drill); // keep an open drill-down list in sync
@@ -4938,11 +5949,11 @@ function AdminDashboard({ routeClinicId, go, notify }) {
   if (loading && !clinic) return <Loading label="Opening your dashboard" />;
 
   const tabs = [
-    ['overview', 'Overview', 'grid'],
-    ['queue', 'Live queue status', 'activity'],
-    ['appointments', 'Appointments', 'list'],
-    ['analytics', 'Analytics', 'chart'],
-    ['settings', 'Clinic settings', 'settings'],
+    ["overview", "Overview", "grid"],
+    ["queue", "Live queue status", "activity"],
+    ["appointments", "Appointments", "list"],
+    ["analytics", "Analytics", "chart"],
+    ["settings", "Clinic settings", "settings"],
   ];
 
   const dayLabel = stats ? stats.dateLabel : fmtDate(date);
@@ -4950,43 +5961,144 @@ function AdminDashboard({ routeClinicId, go, notify }) {
   /* Overview cards. `status`/`quota`/`source` are the filters the drill-down
      dialog replays against /api/admin/appointments for the selected date. */
   const statCards = [
-    { label: 'Total today', value: stats ? stats.total : 0, tone: 'c-teal', icon: 'users', note: 'Bookings excluding cancelled', status: 'active' },
-    { label: 'Patients seen', value: stats ? stats.visited : 0, tone: 'c-green', icon: 'check', note: 'Marked visited', status: 'visited' },
-    { label: 'Still waiting', value: stats ? stats.remaining : 0, tone: 'c-amber', icon: 'clock', note: 'In the queue right now', status: 'booked' },
-    { label: 'Emergency', value: stats ? stats.emergency : 0, tone: 'c-violet', icon: 'alert', note: 'Emergency quota today', status: 'active', quota: 'Emergency' },
+    {
+      label: "Total today",
+      value: stats ? stats.total : 0,
+      tone: "c-teal",
+      icon: "users",
+      note: "Bookings excluding cancelled",
+      status: "active",
+    },
+    {
+      label: "Patients seen",
+      value: stats ? stats.visited : 0,
+      tone: "c-green",
+      icon: "check",
+      note: "Marked visited",
+      status: "visited",
+    },
+    {
+      label: "Still waiting",
+      value: stats ? stats.remaining : 0,
+      tone: "c-amber",
+      icon: "clock",
+      note: "In the queue right now",
+      status: "booked",
+    },
+    {
+      label: "Emergency",
+      value: stats ? stats.emergency : 0,
+      tone: "c-violet",
+      icon: "alert",
+      note: "Emergency quota today",
+      status: "active",
+      quota: "Emergency",
+    },
   ];
 
   const rangeLabel =
     range.startDate || range.endDate
-      ? (range.startDate ? fmtDate(range.startDate) : 'Earliest') + ' to ' + (range.endDate ? fmtDate(range.endDate) : 'Latest')
-      : 'All stored appointments';
+      ? (range.startDate ? fmtDate(range.startDate) : "Earliest") +
+        " to " +
+        (range.endDate ? fmtDate(range.endDate) : "Latest")
+      : "All stored appointments";
 
   /* Analytics tiles - same idea, but scoped to the chosen date range. */
   const analyticsCards = [
-    { label: 'Total booked', value: analytics ? analytics.total : 0, tone: 'c-teal', note: 'Excludes cancelled', status: 'active' },
-    { label: 'Visited', value: analytics ? analytics.visited : 0, tone: 'c-green', note: 'Consultations completed', status: 'visited' },
-    { label: 'Waiting', value: analytics ? analytics.remaining : 0, tone: 'c-amber', note: 'Still in the queue', status: 'booked' },
-    { label: 'Cancelled', value: analytics ? analytics.cancelled : 0, tone: 'c-red', note: 'Cancelled bookings', status: 'cancelled' },
-    { label: 'Visited - General', value: analytics ? analytics.visitedGeneral : 0, tone: 'c-teal', note: 'General quota seen', status: 'visited', quota: 'General' },
-    { label: 'Visited - Emergency', value: analytics ? analytics.visitedEmergency : 0, tone: 'c-violet', note: 'Emergency quota seen', status: 'visited', quota: 'Emergency' },
-    { label: 'Waiting - General', value: analytics ? analytics.remainingGeneral : 0, tone: 'c-blue', note: 'General quota waiting', status: 'booked', quota: 'General' },
-    { label: 'Waiting - Emergency', value: analytics ? analytics.remainingEmergency : 0, tone: 'c-red', note: 'Emergency quota waiting', status: 'booked', quota: 'Emergency' },
-    { label: 'Online bookings', value: analytics ? analytics.online : 0, tone: 'c-teal', note: 'Booked by patients', status: 'active', source: 'online' },
-    { label: 'Walk-in bookings', value: analytics ? analytics.walkIns : 0, tone: 'c-violet', note: 'Added at reception', status: 'active', source: 'walk-in' },
+    {
+      label: "Total booked",
+      value: analytics ? analytics.total : 0,
+      tone: "c-teal",
+      note: "Excludes cancelled",
+      status: "active",
+    },
+    {
+      label: "Visited",
+      value: analytics ? analytics.visited : 0,
+      tone: "c-green",
+      note: "Consultations completed",
+      status: "visited",
+    },
+    {
+      label: "Waiting",
+      value: analytics ? analytics.remaining : 0,
+      tone: "c-amber",
+      note: "Still in the queue",
+      status: "booked",
+    },
+    {
+      label: "Cancelled",
+      value: analytics ? analytics.cancelled : 0,
+      tone: "c-red",
+      note: "Cancelled bookings",
+      status: "cancelled",
+    },
+    {
+      label: "Visited - General",
+      value: analytics ? analytics.visitedGeneral : 0,
+      tone: "c-teal",
+      note: "General quota seen",
+      status: "visited",
+      quota: "General",
+    },
+    {
+      label: "Visited - Emergency",
+      value: analytics ? analytics.visitedEmergency : 0,
+      tone: "c-violet",
+      note: "Emergency quota seen",
+      status: "visited",
+      quota: "Emergency",
+    },
+    {
+      label: "Waiting - General",
+      value: analytics ? analytics.remainingGeneral : 0,
+      tone: "c-blue",
+      note: "General quota waiting",
+      status: "booked",
+      quota: "General",
+    },
+    {
+      label: "Waiting - Emergency",
+      value: analytics ? analytics.remainingEmergency : 0,
+      tone: "c-red",
+      note: "Emergency quota waiting",
+      status: "booked",
+      quota: "Emergency",
+    },
+    {
+      label: "Online bookings",
+      value: analytics ? analytics.online : 0,
+      tone: "c-teal",
+      note: "Booked by patients",
+      status: "active",
+      source: "online",
+    },
+    {
+      label: "Walk-in bookings",
+      value: analytics ? analytics.walkIns : 0,
+      tone: "c-violet",
+      note: "Added at reception",
+      status: "active",
+      source: "walk-in",
+    },
   ];
 
-  const visitedSplit = analytics ? (analytics.visitedGeneral || 0) + (analytics.visitedEmergency || 0) : 0;
-  const genPct = visitedSplit ? Math.round(((analytics.visitedGeneral || 0) / visitedSplit) * 100) : 0;
+  const visitedSplit = analytics
+    ? (analytics.visitedGeneral || 0) + (analytics.visitedEmergency || 0)
+    : 0;
+  const genPct = visitedSplit
+    ? Math.round(((analytics.visitedGeneral || 0) / visitedSplit) * 100)
+    : 0;
   const emgPct = visitedSplit ? 100 - genPct : 0;
 
   /* Cards are divs, not buttons, so the tone-driven currentColor styling is
      untouched. These props restore the keyboard/AX behaviour a button gives. */
   const tapProps = (fn) => ({
-    role: 'button',
+    role: "button",
     tabIndex: 0,
     onClick: fn,
     onKeyDown: (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
+      if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         fn();
       }
@@ -5004,7 +6116,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <th>Quota</th>
         <th>Status</th>
         <th>Source</th>
-        <th style={{ textAlign: 'right' }}>Actions</th>
+        <th style={{ textAlign: "right" }}>Actions</th>
       </tr>
     </thead>
   );
@@ -5016,7 +6128,13 @@ function AdminDashboard({ routeClinicId, go, notify }) {
     return (
       <tr key={id}>
         <td className="tok" data-label="Token">
-          <span className={'tok-chip' + (row.quota === 'Emergency' ? ' em' : '') + (row.status === 'cancelled' ? ' tok-struck' : '')}>
+          <span
+            className={
+              "tok-chip" +
+              (row.quota === "Emergency" ? " em" : "") +
+              (row.status === "cancelled" ? " tok-struck" : "")
+            }
+          >
             {row.bookingNumber}
           </span>
         </td>
@@ -5036,7 +6154,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <td data-label="Contact">
           <div className="contact">
             <b>{row.mobile}</b>
-            <span>{row.email || 'No email'}</span>
+            <span>{row.email || "No email"}</span>
           </div>
         </td>
         <td data-label="Quota">
@@ -5050,25 +6168,57 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         </td>
         <td data-label="Actions">
           <div className="row-actions">
-            <button className="btn btn-ghost btn-sm" onClick={() => setDetail(row)}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setDetail(row)}
+            >
               <Icon name="list" size={14} /> Details
             </button>
-            {row.status === 'booked' ? (
+            {row.status === "booked" ? (
               <>
-                <button className="btn btn-soft btn-sm" disabled={busyId === id + 'visited'} onClick={() => act(row, 'visited')}>
-                  {busyId === id + 'visited' ? <Spinner dark /> : <Icon name="check" size={14} />} Visited
+                <button
+                  className="btn btn-soft btn-sm"
+                  disabled={busyId === id + "visited"}
+                  onClick={() => act(row, "visited")}
+                >
+                  {busyId === id + "visited" ? (
+                    <Spinner dark />
+                  ) : (
+                    <Icon name="check" size={14} />
+                  )}{" "}
+                  Visited
                 </button>
-                <button className="btn btn-danger btn-sm" disabled={busyId === id + 'cancel'} onClick={() => act(row, 'cancel')}>
-                  {busyId === id + 'cancel' ? <Spinner /> : <Icon name="ban" size={14} />} Cancel
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={busyId === id + "cancel"}
+                  onClick={() => act(row, "cancel")}
+                >
+                  {busyId === id + "cancel" ? (
+                    <Spinner />
+                  ) : (
+                    <Icon name="ban" size={14} />
+                  )}{" "}
+                  Cancel
                 </button>
               </>
             ) : null}
-            {row.status === 'visited' ? (
-              <button className="btn btn-outline btn-sm" disabled={busyId === id + 'unvisited'} onClick={() => act(row, 'unvisited')}>
-                {busyId === id + 'unvisited' ? <Spinner dark /> : <Icon name="undo" size={14} />} Revert
+            {row.status === "visited" ? (
+              <button
+                className="btn btn-outline btn-sm"
+                disabled={busyId === id + "unvisited"}
+                onClick={() => act(row, "unvisited")}
+              >
+                {busyId === id + "unvisited" ? (
+                  <Spinner dark />
+                ) : (
+                  <Icon name="undo" size={14} />
+                )}{" "}
+                Revert
               </button>
             ) : null}
-            {row.status === 'cancelled' ? <span className="tiny muted">No actions</span> : null}
+            {row.status === "cancelled" ? (
+              <span className="tiny muted">No actions</span>
+            ) : null}
           </div>
         </td>
       </tr>
@@ -5089,10 +6239,12 @@ function AdminDashboard({ routeClinicId, go, notify }) {
 
   return (
     <div className="adm">
-      {sidebar ? <div className="adm-scrim" onClick={() => setSidebar(false)} /> : null}
+      {sidebar ? (
+        <div className="adm-scrim" onClick={() => setSidebar(false)} />
+      ) : null}
 
-      <aside className={'adm-side' + (sidebar ? ' open' : '')}>
-        <button className="brand" onClick={() => go('/')}>
+      <aside className={"adm-side" + (sidebar ? " open" : "")}>
+        <button className="brand" onClick={() => go("/")}>
           <span className="brand-mark">
             <Cross size={18} />
           </span>
@@ -5102,8 +6254,12 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <div className="adm-clinic">
           <Avatar clinic={clinic} />
           <div>
-            <b title={clinic ? clinic.clinicName : ''}>{clinic ? clinic.clinicName : 'Clinic'}</b>
-            <span title={clinic ? clinic.doctorName : ''}>{clinic ? clinic.doctorName : ''}</span>
+            <b title={clinic ? clinic.clinicName : ""}>
+              {clinic ? clinic.clinicName : "Clinic"}
+            </b>
+            <span title={clinic ? clinic.doctorName : ""}>
+              {clinic ? clinic.doctorName : ""}
+            </span>
           </div>
         </div>
 
@@ -5111,14 +6267,16 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           {tabs.map(([id, label, icon]) => (
             <button
               key={id}
-              className={tab === id ? 'on' : ''}
+              className={tab === id ? "on" : ""}
               onClick={() => {
                 setTab(id);
                 setSidebar(false);
               }}
             >
               <Icon name={icon} size={17} /> {label}
-              {id === 'appointments' && stats ? <span className="count">{stats.total}</span> : null}
+              {id === "appointments" && stats ? (
+                <span className="count">{stats.total}</span>
+              ) : null}
             </button>
           ))}
           <button onClick={() => setWalkOpen(true)}>
@@ -5127,10 +6285,12 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         </nav>
 
         <div className="adm-side-foot">
-          <button onClick={() => go('/clinic/' + (clinic ? clinic.clinicId : ''))}>
+          <button
+            onClick={() => go("/clinic/" + (clinic ? clinic.clinicId : ""))}
+          >
             <Icon name="right" size={16} /> View public page
           </button>
-          <button onClick={() => signOut('')}>
+          <button onClick={() => signOut("")}>
             <Icon name="logout" size={16} /> Sign out
           </button>
         </div>
@@ -5139,13 +6299,18 @@ function AdminDashboard({ routeClinicId, go, notify }) {
       <main className="adm-main">
         <div className="adm-top">
           <div className="row">
-            <button className="btn-icon adm-burger" onClick={() => setSidebar(true)} aria-label="Open menu">
+            <button
+              className="btn-icon adm-burger"
+              onClick={() => setSidebar(true)}
+              aria-label="Open menu"
+            >
               <Icon name="menu" size={19} />
             </button>
             <div>
               <h1>{tabs.find(([id]) => id === tab)[1]}</h1>
               <p className="sub">
-                {clinic ? clinic.clinicName : ''} - {stats ? stats.dateLabel : fmtDate(date)}
+                {clinic ? clinic.clinicName : ""} -{" "}
+                {stats ? stats.dateLabel : fmtDate(date)}
               </p>
             </div>
           </div>
@@ -5153,12 +6318,19 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           <div className="adm-top-actions">
             <label className="date-pick">
               <Icon name="calendar" size={16} />
-              <input type="date" value={date} onChange={(event) => setDate(event.target.value || todayISO())} />
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value || todayISO())}
+              />
             </label>
             <button className="btn btn-soft btn-sm" onClick={refreshAll}>
               <Icon name="refresh" size={15} /> Refresh
             </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setWalkOpen(true)}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setWalkOpen(true)}
+            >
               <Icon name="plus" size={15} /> Walk-in
             </button>
           </div>
@@ -5169,26 +6341,27 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           {error ? <Alert kind="err">{error}</Alert> : null}
 
           {/* ------------------------------------------------------ overview */}
-          {tab === 'overview' ? (
+          {tab === "overview" ? (
             <>
               <div className="hint-bar">
-                <Icon name="spark" size={16} /> Tip: click any card to open the matching patient list for {dayLabel}.
+                <Icon name="spark" size={16} /> Tip: click any card to open the
+                matching patient list for {dayLabel}.
               </div>
 
               <div className="stat-grid">
                 {statCards.map((card, index) => (
                   <Reveal key={card.label} delay={index * 55}>
                     <div
-                      className={'stat tap ' + card.tone}
+                      className={"stat tap " + card.tone}
                       {...tapProps(() =>
                         openDrill({
                           title: card.label,
                           note: dayLabel,
-                          scope: 'day',
-                          status: card.status || '',
-                          quota: card.quota || '',
-                          source: card.source || '',
-                        })
+                          scope: "day",
+                          status: card.status || "",
+                          quota: card.quota || "",
+                          source: card.source || "",
+                        }),
                       )}
                     >
                       <span className="stat-ico">
@@ -5215,12 +6388,20 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                   <small>Next token to be issued</small>
                   <p>
                     {stats && stats.remaining
-                      ? stats.remaining + ' patient(s) still waiting on ' + (stats.dateLabel || fmtDate(date)) + '.'
-                      : 'The queue is clear for ' + (stats ? stats.dateLabel : fmtDate(date)) + '.'}
+                      ? stats.remaining +
+                        " patient(s) still waiting on " +
+                        (stats.dateLabel || fmtDate(date)) +
+                        "."
+                      : "The queue is clear for " +
+                        (stats ? stats.dateLabel : fmtDate(date)) +
+                        "."}
                   </p>
                 </div>
                 <b>#{stats ? stats.nextToken : 1}</b>
-                <button className="btn btn-white" onClick={() => setWalkOpen(true)}>
+                <button
+                  className="btn btn-white"
+                  onClick={() => setWalkOpen(true)}
+                >
                   <Icon name="plus" size={16} /> Issue walk-in token
                 </button>
               </div>
@@ -5229,18 +6410,43 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 <div className="panel-head">
                   <div>
                     <h3>Today at a glance</h3>
-                    <p className="small muted">Progress for {stats ? stats.dateLabel : fmtDate(date)}</p>
+                    <p className="small muted">
+                      Progress for {stats ? stats.dateLabel : fmtDate(date)}
+                    </p>
                   </div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setTab('appointments')}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setTab("appointments")}
+                  >
                     Manage queue <Icon name="right" size={15} />
                   </button>
                 </div>
                 <div className="panel-body bars">
                   {[
-                    ['Patients seen', stats ? stats.visited : 0, stats ? stats.total : 0, 'bf-green'],
-                    ['Still waiting', stats ? stats.remaining : 0, stats ? stats.total : 0, 'bf-amber'],
-                    ['Emergency quota', stats ? stats.emergency : 0, stats ? stats.total : 0, 'bf-red'],
-                    ['Walk-in entries', stats ? stats.walkIns : 0, stats ? stats.total : 0, 'bf-violet'],
+                    [
+                      "Patients seen",
+                      stats ? stats.visited : 0,
+                      stats ? stats.total : 0,
+                      "bf-green",
+                    ],
+                    [
+                      "Still waiting",
+                      stats ? stats.remaining : 0,
+                      stats ? stats.total : 0,
+                      "bf-amber",
+                    ],
+                    [
+                      "Emergency quota",
+                      stats ? stats.emergency : 0,
+                      stats ? stats.total : 0,
+                      "bf-red",
+                    ],
+                    [
+                      "Walk-in entries",
+                      stats ? stats.walkIns : 0,
+                      stats ? stats.total : 0,
+                      "bf-violet",
+                    ],
                   ].map(([label, part, whole, tone]) => (
                     <div className="bar-row" key={label}>
                       <div className="bar-top">
@@ -5250,7 +6456,10 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                         </b>
                       </div>
                       <div className="bar-track">
-                        <div className={'bar-fill ' + tone} style={{ width: pct(part, whole) + '%' }} />
+                        <div
+                          className={"bar-fill " + tone}
+                          style={{ width: pct(part, whole) + "%" }}
+                        />
                       </div>
                     </div>
                   ))}
@@ -5261,9 +6470,14 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 <div className="panel-head">
                   <div>
                     <h3>Appointments for {dayLabel}</h3>
-                    <p className="small muted">{todayRows.length} record(s) on this date</p>
+                    <p className="small muted">
+                      {todayRows.length} record(s) on this date
+                    </p>
                   </div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setTab('appointments')}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setTab("appointments")}
+                  >
                     Open queue view <Icon name="right" size={15} />
                   </button>
                 </div>
@@ -5274,7 +6488,9 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                     <div className="table-wrap">
                       <table className="tbl">
                         {tableHead(false)}
-                        <tbody>{todayRows.map((row) => renderRow(row, false))}</tbody>
+                        <tbody>
+                          {todayRows.map((row) => renderRow(row, false))}
+                        </tbody>
                       </table>
                     </div>
                   ) : (
@@ -5283,7 +6499,9 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                         <Icon name="calendar" size={24} />
                       </div>
                       <h3>Nothing booked for {dayLabel}</h3>
-                      <p>Use the Walk-in button to issue a token at the counter.</p>
+                      <p>
+                        Use the Walk-in button to issue a token at the counter.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -5292,25 +6510,38 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : null}
 
           {/* ---------------------------------------------- live queue status */}
-          {tab === 'queue' ? (
-            <LiveQueueTab clinicId={clinic ? clinic.clinicId : ''} date={date} setDate={setDate} notify={notify} onExpired={signOut} onChanged={refreshAll} />
+          {tab === "queue" ? (
+            <LiveQueueTab
+              clinicId={clinic ? clinic.clinicId : ""}
+              date={date}
+              setDate={setDate}
+              notify={notify}
+              onExpired={signOut}
+              onChanged={refreshAll}
+            />
           ) : null}
 
           {/* -------------------------------------------------- appointments */}
-          {tab === 'appointments' ? (
+          {tab === "appointments" ? (
             <div className="panel">
               <div className="panel-head">
                 <div>
                   <h3>Queue management</h3>
                   <p className="small muted">
                     {range.startDate || range.endDate
-                      ? 'Showing ' + (range.startDate || 'earliest') + ' to ' + (range.endDate || 'latest')
-                      : 'Showing ' + fmtDate(date)}
-                    {' - '}
+                      ? "Showing " +
+                        (range.startDate || "earliest") +
+                        " to " +
+                        (range.endDate || "latest")
+                      : "Showing " + fmtDate(date)}
+                    {" - "}
                     {rows.length} record(s)
                   </p>
                 </div>
-                <button className="btn btn-primary btn-sm" onClick={() => setWalkOpen(true)}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setWalkOpen(true)}
+                >
                   <Icon name="plus" size={15} /> Add walk-in
                 </button>
               </div>
@@ -5322,23 +6553,43 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                     <input
                       className="input"
                       value={filters.search}
-                      onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+                      onChange={(event) =>
+                        setFilters({ ...filters, search: event.target.value })
+                      }
                       placeholder="Search name, mobile, email or booking ID"
                     />
                   </div>
-                  <select className="select" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                  <select
+                    className="select"
+                    value={filters.status}
+                    onChange={(event) =>
+                      setFilters({ ...filters, status: event.target.value })
+                    }
+                  >
                     <option value="">All statuses</option>
                     <option value="active">Active (not cancelled)</option>
                     <option value="booked">Waiting</option>
                     <option value="visited">Visited</option>
                     <option value="cancelled">Cancelled</option>
                   </select>
-                  <select className="select" value={filters.quota} onChange={(event) => setFilters({ ...filters, quota: event.target.value })}>
+                  <select
+                    className="select"
+                    value={filters.quota}
+                    onChange={(event) =>
+                      setFilters({ ...filters, quota: event.target.value })
+                    }
+                  >
                     <option value="">All quotas</option>
                     <option value="General">General</option>
                     <option value="Emergency">Emergency</option>
                   </select>
-                  <select className="select" value={filters.source} onChange={(event) => setFilters({ ...filters, source: event.target.value })}>
+                  <select
+                    className="select"
+                    value={filters.source}
+                    onChange={(event) =>
+                      setFilters({ ...filters, source: event.target.value })
+                    }
+                  >
                     <option value="">All sources</option>
                     <option value="online">Online</option>
                     <option value="walk-in">Walk-in</option>
@@ -5346,8 +6597,13 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => {
-                      setFilters({ search: '', status: '', quota: '', source: '' });
-                      setRange({ startDate: '', endDate: '' });
+                      setFilters({
+                        search: "",
+                        status: "",
+                        quota: "",
+                        source: "",
+                      });
+                      setRange({ startDate: "", endDate: "" });
                       setDate(todayISO());
                     }}
                   >
@@ -5360,28 +6616,53 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 ) : dayGroups.length ? (
                   <div className="day-stack">
                     {dayGroups.map(([groupDate, groupRows]) => {
-                      const seen = groupRows.filter((row) => row.status === 'visited').length;
-                      const waiting = groupRows.filter((row) => row.status === 'booked').length;
-                      const dropped = groupRows.filter((row) => row.status === 'cancelled').length;
-                      const urgent = groupRows.filter((row) => row.quota === 'Emergency' && row.status !== 'cancelled').length;
+                      const seen = groupRows.filter(
+                        (row) => row.status === "visited",
+                      ).length;
+                      const waiting = groupRows.filter(
+                        (row) => row.status === "booked",
+                      ).length;
+                      const dropped = groupRows.filter(
+                        (row) => row.status === "cancelled",
+                      ).length;
+                      const urgent = groupRows.filter(
+                        (row) =>
+                          row.quota === "Emergency" &&
+                          row.status !== "cancelled",
+                      ).length;
                       return (
                         <div className="day-group" key={groupDate}>
                           <div className="day-head">
                             <h4>
-                              <Icon name="calendar" size={16} /> {fmtLongDate(groupDate)}
+                              <Icon name="calendar" size={16} />{" "}
+                              {fmtLongDate(groupDate)}
                             </h4>
                             <div className="day-chips">
-                              <span className="day-chip">{groupRows.length} appointment(s)</span>
+                              <span className="day-chip">
+                                {groupRows.length} appointment(s)
+                              </span>
                               <span className="day-chip">{seen} visited</span>
-                              <span className="day-chip">{waiting} waiting</span>
-                              {urgent ? <span className="day-chip">{urgent} emergency</span> : null}
-                              {dropped ? <span className="day-chip">{dropped} cancelled</span> : null}
+                              <span className="day-chip">
+                                {waiting} waiting
+                              </span>
+                              {urgent ? (
+                                <span className="day-chip">
+                                  {urgent} emergency
+                                </span>
+                              ) : null}
+                              {dropped ? (
+                                <span className="day-chip">
+                                  {dropped} cancelled
+                                </span>
+                              ) : null}
                             </div>
                           </div>
                           <div className="table-wrap">
                             <table className="tbl">
                               {tableHead(false)}
-                              <tbody>{groupRows.map((row) => renderRow(row, false))}</tbody>
+                              <tbody>
+                                {groupRows.map((row) => renderRow(row, false))}
+                              </tbody>
                             </table>
                           </div>
                         </div>
@@ -5402,28 +6683,48 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : null}
 
           {/* ----------------------------------------------------- analytics */}
-          {tab === 'analytics' ? (
+          {tab === "analytics" ? (
             <>
               <div className="panel">
                 <div className="panel-head">
                   <div>
                     <h3>Date range</h3>
-                    <p className="small muted">Leave both dates empty to report on every stored appointment.</p>
+                    <p className="small muted">
+                      Leave both dates empty to report on every stored
+                      appointment.
+                    </p>
                   </div>
                 </div>
                 <div className="panel-body">
                   <div className="grid3">
                     <div className="field">
                       <label>From</label>
-                      <input className="input" type="date" value={range.startDate} onChange={(event) => setRange({ ...range, startDate: event.target.value })} />
+                      <input
+                        className="input"
+                        type="date"
+                        value={range.startDate}
+                        onChange={(event) =>
+                          setRange({ ...range, startDate: event.target.value })
+                        }
+                      />
                     </div>
                     <div className="field">
                       <label>To</label>
-                      <input className="input" type="date" value={range.endDate} onChange={(event) => setRange({ ...range, endDate: event.target.value })} />
+                      <input
+                        className="input"
+                        type="date"
+                        value={range.endDate}
+                        onChange={(event) =>
+                          setRange({ ...range, endDate: event.target.value })
+                        }
+                      />
                     </div>
                     <div className="field">
                       <label>&nbsp;</label>
-                      <button className="btn btn-outline btn-block" onClick={() => setRange({ startDate: '', endDate: '' })}>
+                      <button
+                        className="btn btn-outline btn-block"
+                        onClick={() => setRange({ startDate: "", endDate: "" })}
+                      >
                         <Icon name="refresh" size={16} /> Clear range
                       </button>
                     </div>
@@ -5435,12 +6736,15 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 <div className="panel-head">
                   <div>
                     <h3>Appointment breakdown</h3>
-                    <p className="small muted">General and Emergency split across the selected range.</p>
+                    <p className="small muted">
+                      General and Emergency split across the selected range.
+                    </p>
                   </div>
                 </div>
                 <div className="panel-body">
                   <div className="hint-bar">
-                    <Icon name="spark" size={16} /> Click any tile to list the exact patients it counts - {rangeLabel}.
+                    <Icon name="spark" size={16} /> Click any tile to list the
+                    exact patients it counts - {rangeLabel}.
                   </div>
 
                   <div className="an-grid">
@@ -5452,11 +6756,11 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                           openDrill({
                             title: card.label,
                             note: rangeLabel,
-                            scope: 'range',
-                            status: card.status || '',
-                            quota: card.quota || '',
-                            source: card.source || '',
-                          })
+                            scope: "range",
+                            status: card.status || "",
+                            quota: card.quota || "",
+                            source: card.source || "",
+                          }),
                         )}
                       >
                         <small>{card.label}</small>
@@ -5477,32 +6781,59 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                         <div className="bar-top">
                           <span className="muted">Overall completion</span>
                           <b>
-                            {analytics.visited} of {analytics.total} visited ({pct(analytics.visited, analytics.total)}%)
+                            {analytics.visited} of {analytics.total} visited (
+                            {pct(analytics.visited, analytics.total)}%)
                           </b>
                         </div>
                         <div className="bar-track">
-                          <div className="bar-fill bf-green" style={{ width: pct(analytics.visited, analytics.total) + '%' }} />
+                          <div
+                            className="bar-fill bf-green"
+                            style={{
+                              width:
+                                pct(analytics.visited, analytics.total) + "%",
+                            }}
+                          />
                         </div>
                       </div>
 
                       {visitedSplit ? (
                         <div className="bar-row">
                           <div className="bar-top">
-                            <span className="muted">Visited patients - quota split</span>
+                            <span className="muted">
+                              Visited patients - quota split
+                            </span>
                             <b>
                               General {genPct}% - Emergency {emgPct}%
                             </b>
                           </div>
                           <div className="split-bar">
-                            <i style={{ width: genPct + '%', background: 'var(--grad)' }} />
-                            <i style={{ width: emgPct + '%', background: 'linear-gradient(135deg,#dc2626,#f97316)' }} />
+                            <i
+                              style={{
+                                width: genPct + "%",
+                                background: "var(--grad)",
+                              }}
+                            />
+                            <i
+                              style={{
+                                width: emgPct + "%",
+                                background:
+                                  "linear-gradient(135deg,#dc2626,#f97316)",
+                              }}
+                            />
                           </div>
                           <div className="split-legend">
                             <span>
-                              <em style={{ background: 'var(--grad)' }} /> General - {analytics.visitedGeneral} visited
+                              <em style={{ background: "var(--grad)" }} />{" "}
+                              General - {analytics.visitedGeneral} visited
                             </span>
                             <span>
-                              <em style={{ background: 'linear-gradient(135deg,#dc2626,#f97316)' }} /> Emergency - {analytics.visitedEmergency} visited
+                              <em
+                                style={{
+                                  background:
+                                    "linear-gradient(135deg,#dc2626,#f97316)",
+                                }}
+                              />{" "}
+                              Emergency - {analytics.visitedEmergency} visited
                             </span>
                           </div>
                         </div>
@@ -5516,14 +6847,26 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 <div className="panel-head">
                   <div>
                     <h3>Recent daily trend</h3>
-                    <p className="small muted">Visited versus waiting per day.</p>
+                    <p className="small muted">
+                      Visited versus waiting per day.
+                    </p>
                   </div>
                   <div className="legend">
                     <span>
-                      <i style={{ background: 'linear-gradient(135deg,#059669,#10b981)' }} /> Visited
+                      <i
+                        style={{
+                          background: "linear-gradient(135deg,#059669,#10b981)",
+                        }}
+                      />{" "}
+                      Visited
                     </span>
                     <span>
-                      <i style={{ background: 'linear-gradient(180deg,#7dd3fc,#38bdf8)' }} /> Waiting
+                      <i
+                        style={{
+                          background: "linear-gradient(180deg,#7dd3fc,#38bdf8)",
+                        }}
+                      />{" "}
+                      Waiting
                     </span>
                   </div>
                 </div>
@@ -5532,15 +6875,46 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                     <div className="trend">
                       {(() => {
                         const trend = analytics.trend.slice(-21);
-                        const max = Math.max(1, ...trend.map((item) => item.total || 0));
+                        const max = Math.max(
+                          1,
+                          ...trend.map((item) => item.total || 0),
+                        );
                         return trend.map((item) => {
                           const visited = item.visited || 0;
-                          const waiting = Math.max(0, (item.total || 0) - visited);
+                          const waiting = Math.max(
+                            0,
+                            (item.total || 0) - visited,
+                          );
                           return (
-                            <div className="trend-col" key={item.date} title={item.label + ': ' + (item.total || 0) + ' total, ' + visited + ' visited'}>
+                            <div
+                              className="trend-col"
+                              key={item.date}
+                              title={
+                                item.label +
+                                ": " +
+                                (item.total || 0) +
+                                " total, " +
+                                visited +
+                                " visited"
+                              }
+                            >
                               <div className="trend-bar">
-                                {waiting ? <div className="trend-seg w" style={{ height: (waiting / max) * 100 + '%' }} /> : null}
-                                {visited ? <div className="trend-seg v" style={{ height: (visited / max) * 100 + '%' }} /> : null}
+                                {waiting ? (
+                                  <div
+                                    className="trend-seg w"
+                                    style={{
+                                      height: (waiting / max) * 100 + "%",
+                                    }}
+                                  />
+                                ) : null}
+                                {visited ? (
+                                  <div
+                                    className="trend-seg v"
+                                    style={{
+                                      height: (visited / max) * 100 + "%",
+                                    }}
+                                  />
+                                ) : null}
                               </div>
                               <span className="trend-lbl">{item.label}</span>
                             </div>
@@ -5554,7 +6928,10 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                         <Icon name="chart" size={24} />
                       </div>
                       <h3>No trend data yet</h3>
-                      <p>Once appointments start coming in, daily totals appear here.</p>
+                      <p>
+                        Once appointments start coming in, daily totals appear
+                        here.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -5563,7 +6940,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : null}
 
           {/* ------------------------------------------------------ settings */}
-          {tab === 'settings' && clinic ? (
+          {tab === "settings" && clinic ? (
             <SettingsTab
               clinic={clinic}
               notify={notify}
@@ -5571,7 +6948,9 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 setClinic(updated);
                 setStoredClinic(updated);
               }}
-              onExpired={() => signOut('Your session expired. Please sign in again.')}
+              onExpired={() =>
+                signOut("Your session expired. Please sign in again.")
+              }
               go={go}
             />
           ) : null}
@@ -5582,7 +6961,9 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <WalkInModal
           close={() => setWalkOpen(false)}
           notify={notify}
-          onExpired={() => signOut('Your session expired. Please sign in again.')}
+          onExpired={() =>
+            signOut("Your session expired. Please sign in again.")
+          }
           onAdded={() => {
             setWalkOpen(false);
             setDate(todayISO());
@@ -5595,7 +6976,10 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <Modal
           wide
           title={drill.title}
-          subtitle={drill.note + (drill.loading ? '' : ' - ' + drill.list.length + ' record(s)')}
+          subtitle={
+            drill.note +
+            (drill.loading ? "" : " - " + drill.list.length + " record(s)")
+          }
           onClose={() => setDrill(null)}
           footer={
             <>
@@ -5607,9 +6991,15 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 onClick={() => {
                   const next = drill;
                   setDrill(null);
-                  setFilters({ search: '', status: next.status || '', quota: next.quota || '', source: next.source || '' });
-                  if (next.scope === 'day') setRange({ startDate: '', endDate: '' });
-                  setTab('appointments');
+                  setFilters({
+                    search: "",
+                    status: next.status || "",
+                    quota: next.quota || "",
+                    source: next.source || "",
+                  });
+                  if (next.scope === "day")
+                    setRange({ startDate: "", endDate: "" });
+                  setTab("appointments");
                 }}
               >
                 <Icon name="list" size={15} /> Open in queue view
@@ -5624,8 +7014,12 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : drill.list.length ? (
             <div className="table-wrap">
               <table className="tbl tbl-drill">
-                {tableHead(drill.scope === 'range')}
-                <tbody>{drill.list.map((row) => renderRow(row, drill.scope === 'range'))}</tbody>
+                {tableHead(drill.scope === "range")}
+                <tbody>
+                  {drill.list.map((row) =>
+                    renderRow(row, drill.scope === "range"),
+                  )}
+                </tbody>
               </table>
             </div>
           ) : (
@@ -5642,7 +7036,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
 
       {detail ? (
         <Modal
-          title={'Token #' + detail.bookingNumber + ' - ' + detail.name}
+          title={"Token #" + detail.bookingNumber + " - " + detail.name}
           subtitle={detail.bookingId}
           onClose={() => setDetail(null)}
           footer={
@@ -5650,18 +7044,27 @@ function AdminDashboard({ routeClinicId, go, notify }) {
               <button className="btn btn-ghost" onClick={() => setDetail(null)}>
                 Close
               </button>
-              {detail.status === 'booked' ? (
+              {detail.status === "booked" ? (
                 <>
-                  <button className="btn btn-danger" onClick={() => act(detail, 'cancel')}>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => act(detail, "cancel")}
+                  >
                     <Icon name="ban" size={15} /> Cancel appointment
                   </button>
-                  <button className="btn btn-primary" onClick={() => act(detail, 'visited')}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => act(detail, "visited")}
+                  >
                     <Icon name="check" size={15} /> Mark visited
                   </button>
                 </>
               ) : null}
-              {detail.status === 'visited' ? (
-                <button className="btn btn-outline" onClick={() => act(detail, 'unvisited')}>
+              {detail.status === "visited" ? (
+                <button
+                  className="btn btn-outline"
+                  onClick={() => act(detail, "unvisited")}
+                >
                   <Icon name="undo" size={15} /> Revert to waiting
                 </button>
               ) : null}
@@ -5687,7 +7090,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
             <dt>Mobile</dt>
             <dd>{detail.mobile}</dd>
             <dt>Email</dt>
-            <dd>{detail.email || 'Not provided'}</dd>
+            <dd>{detail.email || "Not provided"}</dd>
             <dt>Address</dt>
             <dd>{detail.address}</dd>
             <dt>Booking ID</dt>
@@ -5705,11 +7108,18 @@ function AdminDashboard({ routeClinicId, go, notify }) {
    that is the single most repeated action of a clinic day, so it must not cost
    a confirmation click. Tapping a visited token asks first, because undoing a
    consultation is the destructive direction. */
-function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged }) {
+function LiveQueueTab({
+  clinicId,
+  date,
+  setDate,
+  notify,
+  onExpired,
+  onChanged,
+}) {
   const [tokens, setTokens] = useState([]);
   const [live, setLive] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [info, setInfo] = useState(null);
@@ -5720,20 +7130,22 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
   const load = useCallback(
     async (silent) => {
       if (!silent) setLoading(true);
-      const data = await api('/admin/queue?date=' + encodeURIComponent(date), { auth: true });
+      const data = await api("/admin/queue?date=" + encodeURIComponent(date), {
+        auth: true,
+      });
       if (!silent) setLoading(false);
       if (!data.success) {
         if (data.unauthorized) return onExpired();
         setError(data.message);
         return undefined;
       }
-      setError('');
+      setError("");
       setTokens(data.tokens || []);
       setLive(data.live || null);
       setBeat(Date.now());
       return undefined;
     },
-    [date, onExpired]
+    [date, onExpired],
   );
 
   useEffect(() => {
@@ -5757,43 +7169,52 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
 
   const apply = async (row, next) => {
     setBusy(row.id);
-    const verb = next === 'visited' ? 'visited' : 'unvisited';
-    const data = await api('/admin/appointments/' + row.id + '/' + verb, { method: 'PUT', auth: true });
+    const verb = next === "visited" ? "visited" : "unvisited";
+    const data = await api("/admin/appointments/" + row.id + "/" + verb, {
+      method: "PUT",
+      auth: true,
+    });
     setBusy(null);
     if (!data.success) {
       if (data.unauthorized) return onExpired();
-      notify(data.message, 'err');
+      notify(data.message, "err");
       return undefined;
     }
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     await load(true);
     if (onChanged) onChanged();
     return undefined;
   };
 
   const tap = (row) => {
-    if (row.status === 'empty' || !row.id) {
-      notify('Token ' + row.bookingNumber + ' was never issued on this date.', 'err');
+    if (row.status === "empty" || !row.id) {
+      notify(
+        "Token " + row.bookingNumber + " was never issued on this date.",
+        "err",
+      );
       return;
     }
-    if (row.status === 'cancelled') {
-      notify('Token ' + row.bookingNumber + ' is cancelled, so it cannot be served.', 'err');
+    if (row.status === "cancelled") {
+      notify(
+        "Token " + row.bookingNumber + " is cancelled, so it cannot be served.",
+        "err",
+      );
       return;
     }
-    if (row.status === 'visited') {
+    if (row.status === "visited") {
       setConfirm(row);
       return;
     }
-    apply(row, 'visited');
+    apply(row, "visited");
   };
 
   const callNext = () => {
-    const next = tokens.find((row) => row.status === 'booked');
+    const next = tokens.find((row) => row.status === "booked");
     if (!next) {
-      notify('No waiting tokens left for this date.', 'err');
+      notify("No waiting tokens left for this date.", "err");
       return;
     }
-    apply(next, 'visited');
+    apply(next, "visited");
   };
 
   const current = live ? live.currentToken : null;
@@ -5803,24 +7224,26 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
   const clearIn = waiting * pace;
 
   const pebbleClass = (row) => {
-    const bits = ['lq-peb'];
-    if (row.status === 'empty') bits.push('gap');
-    else if (row.status === 'cancelled') bits.push('void');
-    else if (row.status === 'visited') bits.push('done');
-    else if (row.quota === 'Emergency') bits.push('emg');
-    else bits.push('wait');
-    if (row.bookingNumber === current) bits.push('now');
-    else if (row.bookingNumber === upNext) bits.push('next');
-    if (busy === row.id) bits.push('busy');
-    return bits.join(' ');
+    const bits = ["lq-peb"];
+    if (row.status === "empty") bits.push("gap");
+    else if (row.status === "cancelled") bits.push("void");
+    else if (row.status === "visited") bits.push("done");
+    else if (row.quota === "Emergency") bits.push("emg");
+    else bits.push("wait");
+    if (row.bookingNumber === current) bits.push("now");
+    else if (row.bookingNumber === upNext) bits.push("next");
+    if (busy === row.id) bits.push("busy");
+    return bits.join(" ");
   };
 
   const hint = (row) => {
-    if (row.status === 'empty') return 'Token ' + row.bookingNumber + ' - not issued';
-    const who = row.name + ' (' + row.age + ', ' + row.gender + ') - ' + row.mobile;
-    if (row.status === 'cancelled') return who + ' - CANCELLED';
-    if (row.status === 'visited') return who + ' - visited, tap to revert';
-    return who + ' - ' + row.quota + ' quota, tap to mark visited';
+    if (row.status === "empty")
+      return "Token " + row.bookingNumber + " - not issued";
+    const who =
+      row.name + " (" + row.age + ", " + row.gender + ") - " + row.mobile;
+    if (row.status === "cancelled") return who + " - CANCELLED";
+    if (row.status === "visited") return who + " - visited, tap to revert";
+    return who + " - " + row.quota + " quota, tap to mark visited";
   };
 
   return (
@@ -5829,39 +7252,54 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
         <div className="lq-hero-in">
           <div className="lq-dial">
             <div>
-              <b>{current ? String(current).padStart(2, '0') : '--'}</b>
+              <b>{current ? String(current).padStart(2, "0") : "--"}</b>
               <small>Now serving</small>
             </div>
           </div>
           <div className="lq-hero-txt">
             <span className="lq-live">
-              <span className={'lq-dot' + (auto ? '' : ' off')} />
-              {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
+              <span className={"lq-dot" + (auto ? "" : " off")} />
+              {socketLive
+                ? "Live - realtime"
+                : auto
+                  ? "Live - polling"
+                  : "Paused"}
             </span>
             <h2 style={{ marginTop: 8 }}>
-              {current ? 'Token ' + current + ' is with the doctor' : 'No token called yet'}
+              {current
+                ? "Token " + current + " is with the doctor"
+                : "No token called yet"}
             </h2>
             <p>
               {live && live.maxToken
-                ? 'Tokens 1 to ' + live.maxToken + ' issued for ' + (live.dateLabel || date) + '. Tap any pebble to change its status.'
-                : 'No tokens have been issued for ' + (live ? live.dateLabel || date : date) + ' yet.'}
+                ? "Tokens 1 to " +
+                  live.maxToken +
+                  " issued for " +
+                  (live.dateLabel || date) +
+                  ". Tap any pebble to change its status."
+                : "No tokens have been issued for " +
+                  (live ? live.dateLabel || date : date) +
+                  " yet."}
             </p>
             <div className="lq-pills">
               <span className="lq-pill">
-                <Icon name="right" size={14} /> Up next <b>{upNext ? '#' + upNext : '--'}</b>
+                <Icon name="right" size={14} /> Up next{" "}
+                <b>{upNext ? "#" + upNext : "--"}</b>
               </span>
               <span className="lq-pill">
                 <Icon name="clock" size={14} /> Waiting <b>{waiting}</b>
               </span>
               <span className="lq-pill">
-                <Icon name="check" size={14} /> Seen <b>{live ? live.visited : 0}</b>
+                <Icon name="check" size={14} /> Seen{" "}
+                <b>{live ? live.visited : 0}</b>
               </span>
               <span className="lq-pill">
                 <Icon name="activity" size={14} /> Pace <b>{pace} min</b>
               </span>
               {waiting ? (
                 <span className="lq-pill">
-                  <Icon name="spark" size={14} /> Clears in <b>~{clearIn} min</b>
+                  <Icon name="spark" size={14} /> Clears in{" "}
+                  <b>~{clearIn} min</b>
                 </span>
               ) : null}
             </div>
@@ -5875,19 +7313,33 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
             <h3>Live queue status</h3>
             <p className="small muted">
               {live && live.paceSamples
-                ? 'Pace is measured from ' + live.paceSamples + ' completed consultation' + (live.paceSamples === 1 ? '' : 's') + ' today.'
-                : 'Pace falls back to ' + pace + ' minutes until two consultations are done.'}
+                ? "Pace is measured from " +
+                  live.paceSamples +
+                  " completed consultation" +
+                  (live.paceSamples === 1 ? "" : "s") +
+                  " today."
+                : "Pace falls back to " +
+                  pace +
+                  " minutes until two consultations are done."}
             </p>
           </div>
           <div className="adm-top-actions">
             <div className="date-pick">
               <Icon name="calendar" size={15} />
-              <input type="date" value={date} onChange={(event) => setDate(event.target.value || todayISO())} />
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value || todayISO())}
+              />
             </div>
             <button className="btn btn-soft btn-sm" onClick={() => load(false)}>
               <Icon name="refresh" size={15} /> Refresh
             </button>
-            <button className="btn btn-primary btn-sm" onClick={callNext} disabled={!waiting}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={callNext}
+              disabled={!waiting}
+            >
               <Icon name="right" size={15} /> Call next token
             </button>
           </div>
@@ -5897,25 +7349,56 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
           <div className="lq-bar" style={{ marginBottom: 18 }}>
             <div className="lq-legend">
               <span className="lq-key">
-                <span className="lq-swatch" style={{ background: 'linear-gradient(145deg,#22d3ee,#0369a1)' }} /> Waiting
+                <span
+                  className="lq-swatch"
+                  style={{
+                    background: "linear-gradient(145deg,#22d3ee,#0369a1)",
+                  }}
+                />{" "}
+                Waiting
               </span>
               <span className="lq-key">
-                <span className="lq-swatch" style={{ background: 'linear-gradient(145deg,#4ade80,#047857)' }} /> Visited
+                <span
+                  className="lq-swatch"
+                  style={{
+                    background: "linear-gradient(145deg,#4ade80,#047857)",
+                  }}
+                />{" "}
+                Visited
               </span>
               <span className="lq-key">
-                <span className="lq-swatch" style={{ background: 'linear-gradient(145deg,#fca5a5,#b91c1c)' }} /> Emergency
+                <span
+                  className="lq-swatch"
+                  style={{
+                    background: "linear-gradient(145deg,#fca5a5,#b91c1c)",
+                  }}
+                />{" "}
+                Emergency
               </span>
               <span className="lq-key">
-                <span className="lq-swatch" style={{ background: 'linear-gradient(145deg,#e2e8f0,#94a3b8)' }} /> Cancelled
+                <span
+                  className="lq-swatch"
+                  style={{
+                    background: "linear-gradient(145deg,#e2e8f0,#94a3b8)",
+                  }}
+                />{" "}
+                Cancelled
               </span>
             </div>
             <div className="row" style={{ gap: 10 }}>
-              <button className={'lq-toggle' + (names ? ' on' : '')} onClick={() => setNames((v) => !v)}>
-                <Icon name={names ? 'user' : 'users'} size={14} /> {names ? 'Names on' : 'Names off'}
+              <button
+                className={"lq-toggle" + (names ? " on" : "")}
+                onClick={() => setNames((v) => !v)}
+              >
+                <Icon name={names ? "user" : "users"} size={14} />{" "}
+                {names ? "Names on" : "Names off"}
               </button>
-              <button className={'lq-toggle' + (auto ? ' on' : '')} onClick={() => setAuto((v) => !v)}>
-                <span className={'lq-dot' + (auto ? '' : ' off')} />{' '}
-                {socketLive ? 'Realtime on' : auto ? 'Auto refresh' : 'Paused'}
+              <button
+                className={"lq-toggle" + (auto ? " on" : "")}
+                onClick={() => setAuto((v) => !v)}
+              >
+                <span className={"lq-dot" + (auto ? "" : " off")} />{" "}
+                {socketLive ? "Realtime on" : auto ? "Auto refresh" : "Paused"}
               </button>
             </div>
           </div>
@@ -5931,7 +7414,8 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
               </div>
               <h4>No tokens issued yet</h4>
               <p className="muted small">
-                As soon as a patient books online or you add a walk-in, token 1 appears here.
+                As soon as a patient books online or you add a walk-in, token 1
+                appears here.
               </p>
             </div>
           ) : (
@@ -5946,17 +7430,21 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
                       onClick={() => tap(row)}
                     >
                       <span>{row.bookingNumber}</span>
-                      {row.quota === 'Emergency' && row.status !== 'empty' ? <i>!</i> : null}
+                      {row.quota === "Emergency" && row.status !== "empty" ? (
+                        <i>!</i>
+                      ) : null}
                       {row.bookingNumber === current ? <u>now</u> : null}
-                      {row.bookingNumber === upNext ? <u>{live && live.nextIsLeftover ? 'left' : 'next'}</u> : null}
+                      {row.bookingNumber === upNext ? (
+                        <u>{live && live.nextIsLeftover ? "left" : "next"}</u>
+                      ) : null}
                     </button>
                     {names ? (
-                      row.status === 'empty' || !row.id ? (
+                      row.status === "empty" || !row.id ? (
                         <span className="lq-cap dim">not issued</span>
                       ) : (
                         <button
                           className="lq-cap"
-                          title={'View full details for ' + row.name}
+                          title={"View full details for " + row.name}
                           onClick={() => setInfo(row)}
                         >
                           {row.name}
@@ -5970,9 +7458,11 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
               <div className="lq-tip" style={{ marginTop: 20 }}>
                 <Icon name="spark" size={16} />
                 <span>
-                  Tap a blue or red pebble to mark that patient <b>visited</b> straight away. Tapping a green pebble
-                  asks for confirmation before reverting it to unvisited. Tap the <b>name</b> under a pebble to open that
-                  patient in full. The dashed amber ring shows who is up next and only ever moves forward, so marking a
+                  Tap a blue or red pebble to mark that patient <b>visited</b>{" "}
+                  straight away. Tapping a green pebble asks for confirmation
+                  before reverting it to unvisited. Tap the <b>name</b> under a
+                  pebble to open that patient in full. The dashed amber ring
+                  shows who is up next and only ever moves forward, so marking a
                   skipped token later never pulls it backwards.
                 </span>
               </div>
@@ -5983,7 +7473,7 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
 
       {info ? (
         <Modal
-          title={'Token #' + info.bookingNumber + ' - ' + info.name}
+          title={"Token #" + info.bookingNumber + " - " + info.name}
           subtitle={info.bookingId}
           onClose={() => setInfo(null)}
           footer={
@@ -5991,19 +7481,19 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
               <button className="btn btn-ghost" onClick={() => setInfo(null)}>
                 Close
               </button>
-              {info.status === 'booked' ? (
+              {info.status === "booked" ? (
                 <button
                   className="btn btn-primary"
                   onClick={() => {
                     const row = info;
                     setInfo(null);
-                    apply(row, 'visited');
+                    apply(row, "visited");
                   }}
                 >
                   <Icon name="check" size={15} /> Mark visited
                 </button>
               ) : null}
-              {info.status === 'visited' ? (
+              {info.status === "visited" ? (
                 <button
                   className="btn btn-outline"
                   onClick={() => {
@@ -6031,22 +7521,25 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
               {info.gender} / {info.age} years
             </dd>
             <dt>Weight</dt>
-            <dd>{info.weight ? info.weight + ' kg' : 'Not recorded'}</dd>
+            <dd>{info.weight ? info.weight + " kg" : "Not recorded"}</dd>
             <dt>Appointment date</dt>
             <dd>{info.dateLabel || fmtLongDate(info.date)}</dd>
             <dt>Mobile</dt>
             <dd>{info.mobile}</dd>
             <dt>Email</dt>
-            <dd>{info.email || 'Not provided'}</dd>
+            <dd>{info.email || "Not provided"}</dd>
             <dt>Address</dt>
-            <dd>{info.address || 'Not recorded'}</dd>
+            <dd>{info.address || "Not recorded"}</dd>
             <dt>Booking ID</dt>
             <dd>{info.bookingId}</dd>
             <dt>Seen at</dt>
             <dd>
               {info.visitedAt
-                ? new Date(info.visitedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'Not yet'}
+                ? new Date(info.visitedAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Not yet"}
             </dd>
           </dl>
         </Modal>
@@ -6054,12 +7547,15 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
 
       {confirm ? (
         <Modal
-          title={'Revert token ' + confirm.bookingNumber + '?'}
-          subtitle={confirm.name + ' - ' + confirm.quota + ' quota'}
+          title={"Revert token " + confirm.bookingNumber + "?"}
+          subtitle={confirm.name + " - " + confirm.quota + " quota"}
           onClose={() => setConfirm(null)}
           footer={
             <>
-              <button className="btn btn-ghost" onClick={() => setConfirm(null)}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setConfirm(null)}
+              >
                 Keep as visited
               </button>
               <button
@@ -6067,7 +7563,7 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
                 onClick={() => {
                   const row = confirm;
                   setConfirm(null);
-                  apply(row, 'booked');
+                  apply(row, "booked");
                 }}
               >
                 <Icon name="undo" size={16} /> Yes, mark unvisited
@@ -6075,10 +7571,14 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
             </>
           }
         >
-          <p style={{ fontSize: 15, fontWeight: 600 }}>Do you want to mark it as unvisited?</p>
+          <p style={{ fontSize: 15, fontWeight: 600 }}>
+            Do you want to mark it as unvisited?
+          </p>
           <p className="muted small" style={{ marginTop: 10 }}>
-            Token {confirm.bookingNumber} goes back into the waiting queue and the patient reappears on the live
-            tracking page. If this was the token being served, "now serving" moves back to the previous visited token.
+            Token {confirm.bookingNumber} goes back into the waiting queue and
+            the patient reappears on the live tracking page. If this was the
+            token being served, "now serving" moves back to the previous visited
+            token.
           </p>
         </Modal>
       ) : null}
@@ -6091,15 +7591,20 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
 function WalkInModal({ close, notify, onAdded, onExpired }) {
   const [form, setForm] = useState({ ...EMPTY_FORM, date: todayISO() });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
-  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const set = (key, value) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/admin/walk-in', { method: 'POST', auth: true, body: { form: { ...form, date: todayISO() } } });
+    setError("");
+    const data = await api("/admin/walk-in", {
+      method: "POST",
+      auth: true,
+      body: { form: { ...form, date: todayISO() } },
+    });
     setBusy(false);
     if (data.unauthorized) {
       onExpired();
@@ -6109,7 +7614,7 @@ function WalkInModal({ close, notify, onAdded, onExpired }) {
       setError(data.message);
       return;
     }
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     onAdded();
   };
 
@@ -6117,14 +7622,20 @@ function WalkInModal({ close, notify, onAdded, onExpired }) {
     <Modal
       wide
       title="Add walk-in patient"
-      subtitle={'Gets the next token in today\'s queue - ' + fmtLongDate(todayISO())}
+      subtitle={
+        "Gets the next token in today's queue - " + fmtLongDate(todayISO())
+      }
       onClose={close}
       footer={
         <>
           <button className="btn btn-ghost" onClick={close}>
             Cancel
           </button>
-          <button className="btn btn-primary" form="walkin-form" disabled={busy}>
+          <button
+            className="btn btn-primary"
+            form="walkin-form"
+            disabled={busy}
+          >
             {busy ? (
               <>
                 <Spinner /> Adding...
@@ -6161,15 +7672,17 @@ function WalkInModal({ close, notify, onAdded, onExpired }) {
  * ========================================================================== */
 
 const QR_QUIET = 4;
-const QR_STOPS = ['#0f766e', '#0d9488', '#0ea5e9'];
+const QR_STOPS = ["#0f766e", "#0d9488", "#0ea5e9"];
 // one rounded module, as a relative SVG path segment
-const QR_DOT = 'h.44a.28.28 0 0 1 .28.28v.44a.28.28 0 0 1-.28.28h-.44a.28.28 0 0 1-.28-.28v-.44a.28.28 0 0 1 .28-.28z';
+const QR_DOT =
+  "h.44a.28.28 0 0 1 .28.28v.44a.28.28 0 0 1-.28.28h-.44a.28.28 0 0 1-.28-.28v-.44a.28.28 0 0 1 .28-.28z";
 
 function qrPathFor(code) {
-  let d = '';
+  let d = "";
   for (let r = 0; r < code.size; r++) {
     for (let c = 0; c < code.size; c++) {
-      if (code.modules[r][c]) d += 'M' + (c + QR_QUIET + 0.28) + ' ' + (r + QR_QUIET) + QR_DOT;
+      if (code.modules[r][c])
+        d += "M" + (c + QR_QUIET + 0.28) + " " + (r + QR_QUIET) + QR_DOT;
     }
   }
   return d;
@@ -6199,7 +7712,7 @@ function loadCorsImage(url) {
       return;
     }
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => resolve(null);
     img.src = url;
@@ -6207,15 +7720,16 @@ function loadCorsImage(url) {
 }
 
 function clipText(ctx, text, maxWidth) {
-  let value = String(text || '');
+  let value = String(text || "");
   if (!value || ctx.measureText(value).width <= maxWidth) return value;
-  while (value.length > 1 && ctx.measureText(value + '...').width > maxWidth) value = value.slice(0, -1);
-  return value + '...';
+  while (value.length > 1 && ctx.measureText(value + "...").width > maxWidth)
+    value = value.slice(0, -1);
+  return value + "...";
 }
 
 function chunkText(text, size) {
   const out = [];
-  let rest = String(text || '');
+  let rest = String(text || "");
   while (rest.length > size) {
     out.push(rest.slice(0, size));
     rest = rest.slice(size);
@@ -6232,10 +7746,11 @@ function QrShareCard({ clinic, link, notify }) {
     setCode(qrMatrix(link));
   }, [link]);
 
-  const person = String(clinic.doctorName || clinic.clinicName || '').trim();
-  const badgeText = person.length > 17 ? person.slice(0, 16) + '.' : person;
+  const person = String(clinic.doctorName || clinic.clinicName || "").trim();
+  const badgeText = person.length > 17 ? person.slice(0, 16) + "." : person;
   const total = code ? code.size + QR_QUIET * 2 : 0;
-  const gradId = 'qrg-' + String(clinic.clinicId || 'clinic').replace(/[^A-Za-z0-9_-]/g, '');
+  const gradId =
+    "qrg-" + String(clinic.clinicId || "clinic").replace(/[^A-Za-z0-9_-]/g, "");
   const badgeW = total * 0.36;
   const badgeH = total * 0.115;
 
@@ -6247,7 +7762,7 @@ function QrShareCard({ clinic, link, notify }) {
     } catch (_error) {
       /* fonts are optional, carry on with the fallbacks */
     }
-    const photo = await loadCorsImage(clinic.photo || '');
+    const photo = await loadCorsImage(clinic.photo || "");
 
     try {
       const S = 3; // print-friendly pixel density
@@ -6258,13 +7773,13 @@ function QrShareCard({ clinic, link, notify }) {
       const urlLines = chunkText(link, 44);
       const H = HEAD + 16 + QS + 18 + urlLines.length * 12 + 22 + PAD;
 
-      const canvas = document.createElement('canvas');
+      const canvas = document.createElement("canvas");
       canvas.width = W * S;
       canvas.height = H * S;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       ctx.scale(S, S);
 
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = "#ffffff";
       ctx.beginPath();
       roundedPath(ctx, 0, 0, W, H, 24);
       ctx.fill();
@@ -6274,8 +7789,8 @@ function QrShareCard({ clinic, link, notify }) {
       roundedPath(ctx, 0, 0, W, H, 24);
       ctx.clip();
       const head = ctx.createLinearGradient(0, 0, W, HEAD);
-      head.addColorStop(0, '#0f766e');
-      head.addColorStop(1, '#0ea5e9');
+      head.addColorStop(0, "#0f766e");
+      head.addColorStop(1, "#0ea5e9");
       ctx.fillStyle = head;
       ctx.fillRect(0, 0, W, HEAD);
       ctx.restore();
@@ -6292,24 +7807,24 @@ function QrShareCard({ clinic, link, notify }) {
         const ph = photo.height * ratio;
         ctx.drawImage(photo, PAD + (AV - pw) / 2, avY + (AV - ph) / 2, pw, ph);
       } else {
-        ctx.fillStyle = 'rgba(255,255,255,.22)';
+        ctx.fillStyle = "rgba(255,255,255,.22)";
         ctx.fillRect(PAD, avY, AV, AV);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '700 18px Sora, Segoe UI, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "700 18px Sora, Segoe UI, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         ctx.fillText(initials(clinic.clinicName), PAD + AV / 2, HEAD / 2);
       }
       ctx.restore();
 
       const tx = PAD + AV + 14;
       const room = W - tx - PAD;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '700 15px Sora, Segoe UI, sans-serif';
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 15px Sora, Segoe UI, sans-serif";
       ctx.fillText(clipText(ctx, clinic.clinicName, room), tx, 42);
-      ctx.font = '600 11.5px Inter, Segoe UI, sans-serif';
+      ctx.font = "600 11.5px Inter, Segoe UI, sans-serif";
       ctx.globalAlpha = 0.95;
       ctx.fillText(clipText(ctx, clinic.doctorName, room), tx, 60);
       ctx.globalAlpha = 0.85;
@@ -6317,7 +7832,7 @@ function QrShareCard({ clinic, link, notify }) {
       ctx.globalAlpha = 1;
 
       const qy = HEAD + 16;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = "#ffffff";
       ctx.fillRect(PAD, qy, QS, QS);
       const unit = QS / total;
       const grad = ctx.createLinearGradient(PAD, qy, PAD + QS, qy + QS);
@@ -6329,7 +7844,14 @@ function QrShareCard({ clinic, link, notify }) {
       for (let r = 0; r < code.size; r++) {
         for (let c = 0; c < code.size; c++) {
           if (!code.modules[r][c]) continue;
-          roundedPath(ctx, PAD + (c + QR_QUIET) * unit, qy + (r + QR_QUIET) * unit, unit, unit, unit * 0.28);
+          roundedPath(
+            ctx,
+            PAD + (c + QR_QUIET) * unit,
+            qy + (r + QR_QUIET) * unit,
+            unit,
+            unit,
+            unit * 0.28,
+          );
         }
       }
       ctx.fill();
@@ -6338,51 +7860,55 @@ function QrShareCard({ clinic, link, notify }) {
       const bh = QS * 0.115;
       const bx = PAD + (QS - bw) / 2;
       const by = qy + (QS - bh) / 2;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = "#ffffff";
       ctx.beginPath();
       roundedPath(ctx, bx, by, bw, bh, bh * 0.34);
       ctx.fill();
-      ctx.strokeStyle = '#0f766e';
+      ctx.strokeStyle = "#0f766e";
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       roundedPath(ctx, bx, by, bw, bh, bh * 0.34);
       ctx.stroke();
-      ctx.fillStyle = '#0f766e';
-      ctx.font = '700 ' + Math.round(bh * 0.44) + 'px Sora, Segoe UI, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      ctx.fillStyle = "#0f766e";
+      ctx.font =
+        "700 " + Math.round(bh * 0.44) + "px Sora, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillText(clipText(ctx, badgeText, bw - 12), bx + bw / 2, by + bh / 2);
 
       let ty = qy + QS + 18;
-      ctx.font = '10px ui-monospace, Menlo, monospace';
-      ctx.fillStyle = '#64748b';
+      ctx.font = "10px ui-monospace, Menlo, monospace";
+      ctx.fillStyle = "#64748b";
       urlLines.forEach((line) => {
         ctx.fillText(line, W / 2, ty);
         ty += 12;
       });
-      ctx.font = '800 10.5px Inter, Segoe UI, sans-serif';
-      ctx.fillStyle = '#0f766e';
-      ctx.fillText('SCAN TO BOOK - MEDICARE FLOW', W / 2, ty + 12);
+      ctx.font = "800 10.5px Inter, Segoe UI, sans-serif";
+      ctx.fillStyle = "#0f766e";
+      ctx.fillText("SCAN TO BOOK - MEDICARE FLOW", W / 2, ty + 12);
 
       canvas.toBlob((blob) => {
         setBusy(false);
         if (!blob) {
-          notify('The QR card could not be generated in this browser.', 'err');
+          notify("The QR card could not be generated in this browser.", "err");
           return;
         }
         const href = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
+        const anchor = document.createElement("a");
         anchor.href = href;
-        anchor.download = (clinic.clinicId || 'clinic') + '-booking-qr.png';
+        anchor.download = (clinic.clinicId || "clinic") + "-booking-qr.png";
         document.body.appendChild(anchor);
         anchor.click();
         document.body.removeChild(anchor);
         setTimeout(() => URL.revokeObjectURL(href), 4000);
-        notify('QR card downloaded.', 'ok');
-      }, 'image/png');
+        notify("QR card downloaded.", "ok");
+      }, "image/png");
     } catch (error) {
       setBusy(false);
-      notify('The QR card could not be exported. ' + (error.message || ''), 'err');
+      notify(
+        "The QR card could not be exported. " + (error.message || ""),
+        "err",
+      );
     }
   };
 
@@ -6391,25 +7917,38 @@ function QrShareCard({ clinic, link, notify }) {
       <div className="panel-head">
         <div>
           <h3>Booking QR card</h3>
-          <p className="small muted">Print it for the reception desk or share the image. Scanning opens your booking page.</p>
+          <p className="small muted">
+            Print it for the reception desk or share the image. Scanning opens
+            your booking page.
+          </p>
         </div>
       </div>
       <div className="panel-body">
         <div className="qrc-wrap">
           <div className="qrc">
             <div className="qrc-top">
-              <div className="qrc-av">{clinic.photo ? <img src={clinic.photo} alt="" /> : initials(clinic.clinicName)}</div>
+              <div className="qrc-av">
+                {clinic.photo ? (
+                  <img src={clinic.photo} alt="" />
+                ) : (
+                  initials(clinic.clinicName)
+                )}
+              </div>
               <div className="qrc-id">
                 <b>{clinic.clinicName}</b>
                 <span>
                   {clinic.doctorName}
-                  {clinic.specialization ? ' - ' + clinic.specialization : ''}
+                  {clinic.specialization ? " - " + clinic.specialization : ""}
                 </span>
               </div>
             </div>
             <div className="qrc-code">
               {code ? (
-                <svg viewBox={'0 0 ' + total + ' ' + total} role="img" aria-label="QR code for the booking page">
+                <svg
+                  viewBox={"0 0 " + total + " " + total}
+                  role="img"
+                  aria-label="QR code for the booking page"
+                >
                   <defs>
                     <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
                       <stop offset="0%" stopColor={QR_STOPS[0]} />
@@ -6418,7 +7957,7 @@ function QrShareCard({ clinic, link, notify }) {
                     </linearGradient>
                   </defs>
                   <rect width={total} height={total} fill="#ffffff" />
-                  <path d={qrPathFor(code)} fill={'url(#' + gradId + ')'} />
+                  <path d={qrPathFor(code)} fill={"url(#" + gradId + ")"} />
                   <rect
                     x={(total - badgeW) / 2}
                     y={(total - badgeH) / 2}
@@ -6454,10 +7993,15 @@ function QrShareCard({ clinic, link, notify }) {
 
           <div className="qrc-side">
             <p className="qrc-hint">
-              The card downloads as a high-resolution PNG with your photo, name and speciality already on it, so it is ready to print or
-              post as-is.
+              The card downloads as a high-resolution PNG with your photo, name
+              and speciality already on it, so it is ready to print or post
+              as-is.
             </p>
-            <button className="btn btn-primary btn-sm" onClick={download} disabled={busy || !code}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={download}
+              disabled={busy || !code}
+            >
               {busy ? (
                 <>
                   <Spinner /> Preparing card...
@@ -6473,16 +8017,17 @@ function QrShareCard({ clinic, link, notify }) {
               onClick={() => {
                 if (navigator.clipboard) {
                   navigator.clipboard.writeText(link);
-                  notify('Booking link copied.', 'ok');
+                  notify("Booking link copied.", "ok");
                 } else {
-                  notify('Copy is not available in this browser.', 'err');
+                  notify("Copy is not available in this browser.", "err");
                 }
               }}
             >
               <Icon name="list" size={15} /> Copy the link
             </button>
             <p className="qrc-hint">
-              Generated on this device with 30% error correction, which is why the name badge in the middle does not stop it scanning.
+              Generated on this device with 30% error correction, which is why
+              the name badge in the middle does not stop it scanning.
             </p>
           </div>
         </div>
@@ -6493,31 +8038,40 @@ function QrShareCard({ clinic, link, notify }) {
 
 function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
   const [profile, setProfile] = useState({
-    clinicName: clinic.clinicName || '',
-    doctorName: clinic.doctorName || '',
-    specialization: clinic.specialization || '',
-    address: clinic.address || '',
-    city: clinic.city || '',
-    phone: clinic.phone || '',
-    photo: clinic.photo || '',
-    photoKey: clinic.photoKey || '',
-    timings: clinic.timings || '',
-    about: clinic.about || '',
-    adminEmail: clinic.adminEmail || '',
+    clinicName: clinic.clinicName || "",
+    doctorName: clinic.doctorName || "",
+    specialization: clinic.specialization || "",
+    address: clinic.address || "",
+    city: clinic.city || "",
+    phone: clinic.phone || "",
+    photo: clinic.photo || "",
+    photoKey: clinic.photoKey || "",
+    timings: clinic.timings || "",
+    about: clinic.about || "",
+    adminEmail: clinic.adminEmail || "",
   });
-  const [pw, setPw] = useState({ currentPassword: '', newPassword: '', confirm: '' });
-  const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
-  const [pwError, setPwError] = useState('');
+  const [pw, setPw] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirm: "",
+  });
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [pwError, setPwError] = useState("");
 
-  const set = (key, value) => setProfile((current) => ({ ...current, [key]: value }));
+  const set = (key, value) =>
+    setProfile((current) => ({ ...current, [key]: value }));
 
   const saveProfile = async (event) => {
     event.preventDefault();
-    setBusy('profile');
-    setError('');
-    const data = await api('/admin/profile', { method: 'PUT', auth: true, body: profile });
-    setBusy('');
+    setBusy("profile");
+    setError("");
+    const data = await api("/admin/profile", {
+      method: "PUT",
+      auth: true,
+      body: profile,
+    });
+    setBusy("");
     if (data.unauthorized) {
       onExpired();
       return;
@@ -6527,23 +8081,26 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
       return;
     }
     onSaved(data.clinic);
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
   };
 
   const savePassword = async (event) => {
     event.preventDefault();
     if (pw.newPassword !== pw.confirm) {
-      setPwError('The two new passwords do not match.');
+      setPwError("The two new passwords do not match.");
       return;
     }
-    setBusy('password');
-    setPwError('');
-    const data = await api('/admin/password', {
-      method: 'PUT',
+    setBusy("password");
+    setPwError("");
+    const data = await api("/admin/password", {
+      method: "PUT",
       auth: true,
-      body: { currentPassword: pw.currentPassword, newPassword: pw.newPassword },
+      body: {
+        currentPassword: pw.currentPassword,
+        newPassword: pw.newPassword,
+      },
     });
-    setBusy('');
+    setBusy("");
     if (data.unauthorized) {
       onExpired();
       return;
@@ -6552,12 +8109,16 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
       setPwError(data.message);
       return;
     }
-    setPw({ currentPassword: '', newPassword: '', confirm: '' });
-    notify(data.message, 'ok');
+    setPw({ currentPassword: "", newPassword: "", confirm: "" });
+    notify(data.message, "ok");
   };
 
   const bookingLink =
-    (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') + '#/clinic/' + clinic.clinicId;
+    (typeof window !== "undefined"
+      ? window.location.origin + window.location.pathname
+      : "") +
+    "#/clinic/" +
+    clinic.clinicId;
 
   return (
     <div className="set-grid">
@@ -6565,22 +8126,38 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
         <div className="panel-head">
           <div>
             <h3>Clinic profile</h3>
-            <p className="small muted">This is what patients see in the public directory.</p>
+            <p className="small muted">
+              This is what patients see in the public directory.
+            </p>
           </div>
         </div>
         <div className="panel-body form-grid">
           <div className="field">
             <label>Clinic name</label>
-            <input className="input" required value={profile.clinicName} onChange={(e) => set('clinicName', e.target.value)} />
+            <input
+              className="input"
+              required
+              value={profile.clinicName}
+              onChange={(e) => set("clinicName", e.target.value)}
+            />
           </div>
           <div className="grid2">
             <div className="field">
               <label>Doctor name</label>
-              <input className="input" required value={profile.doctorName} onChange={(e) => set('doctorName', e.target.value)} />
+              <input
+                className="input"
+                required
+                value={profile.doctorName}
+                onChange={(e) => set("doctorName", e.target.value)}
+              />
             </div>
             <div className="field">
               <label>Specialization</label>
-              <select className="select" value={profile.specialization} onChange={(e) => set('specialization', e.target.value)}>
+              <select
+                className="select"
+                value={profile.specialization}
+                onChange={(e) => set("specialization", e.target.value)}
+              >
                 {SPECIALIZATIONS.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -6591,46 +8168,81 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
           </div>
           <div className="field">
             <label>Address</label>
-            <textarea className="textarea" rows="2" required value={profile.address} onChange={(e) => set('address', e.target.value)} />
+            <textarea
+              className="textarea"
+              rows="2"
+              required
+              value={profile.address}
+              onChange={(e) => set("address", e.target.value)}
+            />
           </div>
           <div className="grid2">
             <div className="field">
               <label>City</label>
-              <input className="input" value={profile.city} onChange={(e) => set('city', e.target.value)} />
+              <input
+                className="input"
+                value={profile.city}
+                onChange={(e) => set("city", e.target.value)}
+              />
             </div>
             <div className="field">
               <label>Phone</label>
-              <input className="input" value={profile.phone} onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+              <input
+                className="input"
+                value={profile.phone}
+                onChange={(e) =>
+                  set("phone", e.target.value.replace(/\D/g, "").slice(0, 10))
+                }
+              />
             </div>
           </div>
           <div className="grid2">
             <div className="field">
               <label>Opening hours</label>
-              <input className="input" value={profile.timings} onChange={(e) => set('timings', e.target.value)} placeholder="Mon-Sat, 9 AM - 6 PM" />
+              <input
+                className="input"
+                value={profile.timings}
+                onChange={(e) => set("timings", e.target.value)}
+                placeholder="Mon-Sat, 9 AM - 6 PM"
+              />
             </div>
             <div className="field">
               <ImagePicker
                 value={profile.photo}
                 onChange={(url, key) => {
-                  set('photo', url);
-                  set('photoKey', key);
+                  set("photo", url);
+                  set("photoKey", key);
                 }}
               />
             </div>
           </div>
           <div className="field">
             <label>About the clinic</label>
-            <textarea className="textarea" rows="3" value={profile.about} onChange={(e) => set('about', e.target.value)} placeholder="Services, facilities, anything patients should know" />
+            <textarea
+              className="textarea"
+              rows="3"
+              value={profile.about}
+              onChange={(e) => set("about", e.target.value)}
+              placeholder="Services, facilities, anything patients should know"
+            />
           </div>
           <div className="field">
             <label>Admin email (password resets)</label>
-            <input className="input" type="email" value={profile.adminEmail} onChange={(e) => set('adminEmail', e.target.value)} />
+            <input
+              className="input"
+              type="email"
+              value={profile.adminEmail}
+              onChange={(e) => set("adminEmail", e.target.value)}
+            />
           </div>
 
           {error ? <Alert kind="err">{error}</Alert> : null}
 
-          <button className="btn btn-primary btn-block" disabled={busy === 'profile'}>
-            {busy === 'profile' ? (
+          <button
+            className="btn btn-primary btn-block"
+            disabled={busy === "profile"}
+          >
+            {busy === "profile" ? (
               <>
                 <Spinner /> Saving...
               </>
@@ -6648,7 +8260,9 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
           <div className="panel-head">
             <div>
               <h3>Your public booking link</h3>
-              <p className="small muted">Share this with patients, print it, or add it to your board.</p>
+              <p className="small muted">
+                Share this with patients, print it, or add it to your board.
+              </p>
             </div>
           </div>
           <div className="panel-body stack">
@@ -6662,15 +8276,18 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
                 onClick={() => {
                   if (navigator.clipboard) {
                     navigator.clipboard.writeText(bookingLink);
-                    notify('Booking link copied.', 'ok');
+                    notify("Booking link copied.", "ok");
                   } else {
-                    notify('Copy is not available in this browser.', 'err');
+                    notify("Copy is not available in this browser.", "err");
                   }
                 }}
               >
                 <Icon name="list" size={15} /> Copy link
               </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => go('/clinic/' + clinic.clinicId)}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => go("/clinic/" + clinic.clinicId)}
+              >
                 <Icon name="right" size={15} /> Open booking page
               </button>
             </div>
@@ -6680,7 +8297,11 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
               <dt>Admin user ID</dt>
               <dd className="mono">{clinic.adminUserId}</dd>
               <dt>Registered</dt>
-              <dd>{clinic.createdAt ? fmtLongDate(String(clinic.createdAt).slice(0, 10)) : '-'}</dd>
+              <dd>
+                {clinic.createdAt
+                  ? fmtLongDate(String(clinic.createdAt).slice(0, 10))
+                  : "-"}
+              </dd>
             </dl>
           </div>
         </div>
@@ -6691,7 +8312,9 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
           <div className="panel-head">
             <div>
               <h3>Change password</h3>
-              <p className="small muted">Passwords are stored only as bcrypt hashes.</p>
+              <p className="small muted">
+                Passwords are stored only as bcrypt hashes.
+              </p>
             </div>
           </div>
           <div className="panel-body form-grid">
@@ -6702,7 +8325,9 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
                 required
                 type="password"
                 value={pw.currentPassword}
-                onChange={(e) => setPw({ ...pw, currentPassword: e.target.value })}
+                onChange={(e) =>
+                  setPw({ ...pw, currentPassword: e.target.value })
+                }
                 autoComplete="current-password"
               />
             </div>
@@ -6715,14 +8340,19 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
                   type="password"
                   minLength="6"
                   value={pw.newPassword}
-                  onChange={(e) => setPw({ ...pw, newPassword: e.target.value })}
+                  onChange={(e) =>
+                    setPw({ ...pw, newPassword: e.target.value })
+                  }
                   autoComplete="new-password"
                 />
               </div>
               <div className="field">
                 <label>Confirm new password</label>
                 <input
-                  className={'input' + (pw.confirm && pw.confirm !== pw.newPassword ? ' bad' : '')}
+                  className={
+                    "input" +
+                    (pw.confirm && pw.confirm !== pw.newPassword ? " bad" : "")
+                  }
                   required
                   type="password"
                   value={pw.confirm}
@@ -6734,8 +8364,11 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
 
             {pwError ? <Alert kind="err">{pwError}</Alert> : null}
 
-            <button className="btn btn-dark btn-block" disabled={busy === 'password'}>
-              {busy === 'password' ? (
+            <button
+              className="btn btn-dark btn-block"
+              disabled={busy === "password"}
+            >
+              {busy === "password" ? (
                 <>
                   <Spinner /> Updating...
                 </>
@@ -6768,32 +8401,36 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
    approved and visible, which is the normal steady state. */
 function ListingStatusBanner({ clinic }) {
   if (!clinic) return null;
-  const status = clinic.status || 'approved';
-  if (status === 'approved' && !clinic.hidden) return null;
+  const status = clinic.status || "approved";
+  if (status === "approved" && !clinic.hidden) return null;
 
-  if (status === 'pending') {
+  if (status === "pending") {
     return (
       <div className="lst-banner pend">
         <Icon name="clock" size={19} />
         <div>
           <b>Awaiting approval</b>
-          Your clinic is registered and this dashboard is fully usable, but the listing is not on the public homepage yet.
-          Every new clinic is reviewed before going live - we will email you the moment it is approved, and online booking
-          opens at the same time.
+          Your clinic is registered and this dashboard is fully usable, but the
+          listing is not on the public homepage yet. Every new clinic is
+          reviewed before going live - we will email you the moment it is
+          approved, and online booking opens at the same time.
         </div>
       </div>
     );
   }
 
-  if (status === 'rejected') {
+  if (status === "rejected") {
     return (
       <div className="lst-banner rej">
         <Icon name="ban" size={19} />
         <div>
           <b>Listing not approved</b>
-          {clinic.rejectionNote ? 'Reason given: ' + clinic.rejectionNote + ' ' : ''}
-          Your admin account still works. Correct your details in Clinic settings, then reply to the notification email to
-          ask for another review.
+          {clinic.rejectionNote
+            ? "Reason given: " + clinic.rejectionNote + " "
+            : ""}
+          Your admin account still works. Correct your details in Clinic
+          settings, then reply to the notification email to ask for another
+          review.
         </div>
       </div>
     );
@@ -6804,23 +8441,24 @@ function ListingStatusBanner({ clinic }) {
       <Icon name="alert" size={19} />
       <div>
         <b>Temporarily hidden from the homepage</b>
-        New patients cannot discover you in the public directory right now. Your live queue, existing tokens and direct
-        booking links all keep working normally.
+        New patients cannot discover you in the public directory right now. Your
+        live queue, existing tokens and direct booking links all keep working
+        normally.
       </div>
     </div>
   );
 }
 
 function OwnerLoginPage({ onSignedIn, notify, go }) {
-  const [form, setForm] = useState({ userId: '', password: '' });
+  const [form, setForm] = useState({ userId: "", password: "" });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
-    const data = await api('/owner/login', { method: 'POST', body: form });
+    setError("");
+    const data = await api("/owner/login", { method: "POST", body: form });
     setBusy(false);
     if (!data.success) {
       setError(data.message);
@@ -6828,14 +8466,14 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
     }
     setOwnerToken(data.token);
     setStoredOwner(data.owner);
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     onSignedIn(data.owner);
   };
 
   return (
     <div className="own-gate">
       <form className="own-gate-card" onSubmit={submit} noValidate>
-        <button type="button" className="brand" onClick={() => go('/')}>
+        <button type="button" className="brand" onClick={() => go("/")}>
           <span className="brand-mark">
             <Cross size={19} />
           </span>
@@ -6846,7 +8484,10 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
           <Icon name="shield" size={13} /> Platform owner
         </span>
         <h2>Master admin panel</h2>
-        <p className="lead">Approve clinic listings, edit them, hide them or remove them. This console is not linked from the public navigation.</p>
+        <p className="lead">
+          Approve clinic listings, edit them, hide them or remove them. This
+          console is not linked from the public navigation.
+        </p>
 
         <div className="form-grid">
           <div className="field">
@@ -6857,7 +8498,9 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
                 className="input"
                 required
                 value={form.userId}
-                onChange={(event) => setForm({ ...form, userId: event.target.value })}
+                onChange={(event) =>
+                  setForm({ ...form, userId: event.target.value })
+                }
                 placeholder="owner"
                 autoComplete="username"
               />
@@ -6872,7 +8515,9 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
                 required
                 type="password"
                 value={form.password}
-                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                onChange={(event) =>
+                  setForm({ ...form, password: event.target.value })
+                }
                 placeholder="Your owner password"
                 autoComplete="current-password"
               />
@@ -6901,8 +8546,9 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
         </div>
 
         <div className="own-gate-foot">
-          Credentials come from OWNER_ID and OWNER_PASSWORD in the backend .env file - there is no owner account in the
-          database, so this login cannot be created or changed through the API.
+          Credentials come from OWNER_ID and OWNER_PASSWORD in the backend .env
+          file - there is no owner account in the database, so this login cannot
+          be created or changed through the API.
         </div>
       </form>
     </div>
@@ -6916,36 +8562,43 @@ function OwnerLoginPage({ onSignedIn, notify, go }) {
 function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
   const editing = Boolean(clinic);
   const [form, setForm] = useState({
-    clinicName: editing ? clinic.clinicName || '' : '',
-    doctorName: editing ? clinic.doctorName || '' : '',
-    specialization: editing ? clinic.specialization || 'General Physician' : 'General Physician',
-    address: editing ? clinic.address || '' : '',
-    city: editing ? clinic.city || '' : '',
-    phone: editing ? clinic.phone || '' : '',
-    timings: editing ? clinic.timings || '' : '',
-    photo: editing ? clinic.photo || '' : '',
-    photoKey: editing ? clinic.photoKey || '' : '',
-    about: editing ? clinic.about || '' : '',
-    adminUserId: editing ? clinic.adminUserId || '' : '',
-    adminEmail: editing ? clinic.adminEmail || '' : '',
-    password: '',
+    clinicName: editing ? clinic.clinicName || "" : "",
+    doctorName: editing ? clinic.doctorName || "" : "",
+    specialization: editing
+      ? clinic.specialization || "General Physician"
+      : "General Physician",
+    address: editing ? clinic.address || "" : "",
+    city: editing ? clinic.city || "" : "",
+    phone: editing ? clinic.phone || "" : "",
+    timings: editing ? clinic.timings || "" : "",
+    photo: editing ? clinic.photo || "" : "",
+    photoKey: editing ? clinic.photoKey || "" : "",
+    about: editing ? clinic.about || "" : "",
+    adminUserId: editing ? clinic.adminUserId || "" : "",
+    adminEmail: editing ? clinic.adminEmail || "" : "",
+    password: "",
   });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
-  const set = (key) => (event) => setForm((prev) => Object.assign({}, prev, { [key]: event.target.value }));
+  const set = (key) => (event) =>
+    setForm((prev) => Object.assign({}, prev, { [key]: event.target.value }));
 
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
+    setError("");
 
     const body = Object.assign({}, form);
     if (editing && !body.password) delete body.password;
 
     const data = editing
-      ? await api('/owner/clinics/' + clinic.clinicId, { method: 'PUT', owner: true, body })
-      : await api('/owner/clinics', { method: 'POST', owner: true, body });
+      ? await api("/owner/clinics/" + clinic.clinicId, {
+          method: "PUT",
+          owner: true,
+          body,
+        })
+      : await api("/owner/clinics", { method: "POST", owner: true, body });
 
     setBusy(false);
     if (!data.success) {
@@ -6956,7 +8609,7 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
       setError(data.message);
       return;
     }
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     onSaved();
     close();
   };
@@ -6964,52 +8617,83 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
   return (
     <Modal
       wide
-      title={editing ? 'Edit listing' : 'Add a listing'}
+      title={editing ? "Edit listing" : "Add a listing"}
       subtitle={
         editing
-          ? clinic.clinicName + ' - changes go live immediately'
-          : 'Owner-created listings skip the approval queue and are published straight away'
+          ? clinic.clinicName + " - changes go live immediately"
+          : "Owner-created listings skip the approval queue and are published straight away"
       }
       onClose={close}
       footer={
         <>
-          <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={close}
+            disabled={busy}
+          >
             Cancel
           </button>
-          <button className="btn btn-primary" form="listing-form" disabled={busy}>
+          <button
+            className="btn btn-primary"
+            form="listing-form"
+            disabled={busy}
+          >
             {busy ? (
               <>
                 <Spinner /> Saving...
               </>
             ) : (
               <>
-                <Icon name="check" size={16} /> {editing ? 'Save changes' : 'Add and publish'}
+                <Icon name="check" size={16} />{" "}
+                {editing ? "Save changes" : "Add and publish"}
               </>
             )}
           </button>
         </>
       }
     >
-      <form id="listing-form" className="form-grid" onSubmit={submit} noValidate>
+      <form
+        id="listing-form"
+        className="form-grid"
+        onSubmit={submit}
+        noValidate
+      >
         <div className="field">
           <label>
             Clinic / hospital name <span className="req">*</span>
           </label>
-          <input className="input" required value={form.clinicName} onChange={set('clinicName')} placeholder="Vrindavan Hospital" />
+          <input
+            className="input"
+            required
+            value={form.clinicName}
+            onChange={set("clinicName")}
+            placeholder="Vrindavan Hospital"
+          />
         </div>
 
         <div className="field">
           <label>
             Doctor name <span className="req">*</span>
           </label>
-          <input className="input" required value={form.doctorName} onChange={set('doctorName')} placeholder="Dr. Arnav Tyagi (MBBS)" />
+          <input
+            className="input"
+            required
+            value={form.doctorName}
+            onChange={set("doctorName")}
+            placeholder="Dr. Arnav Tyagi (MBBS)"
+          />
         </div>
 
         <div className="field">
           <label>
             Specialization <span className="req">*</span>
           </label>
-          <select className="select" value={form.specialization} onChange={set('specialization')}>
+          <select
+            className="select"
+            value={form.specialization}
+            onChange={set("specialization")}
+          >
             {SPECIALIZATIONS.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -7022,63 +8706,117 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
           <label>
             Address <span className="req">*</span>
           </label>
-          <textarea className="textarea" required rows={2} value={form.address} onChange={set('address')} placeholder="Street, area, landmark" />
+          <textarea
+            className="textarea"
+            required
+            rows={2}
+            value={form.address}
+            onChange={set("address")}
+            placeholder="Street, area, landmark"
+          />
         </div>
 
         <div className="field">
           <label>City</label>
-          <input className="input" value={form.city} onChange={set('city')} placeholder="Agartala" />
+          <input
+            className="input"
+            value={form.city}
+            onChange={set("city")}
+            placeholder="Agartala"
+          />
         </div>
 
         <div className="field">
           <label>
             Clinic phone (10 digits) <span className="req">*</span>
           </label>
-          <input className="input" required inputMode="numeric" maxLength={10} value={form.phone} onChange={set('phone')} placeholder="9876543210" />
+          <input
+            className="input"
+            required
+            inputMode="numeric"
+            maxLength={10}
+            value={form.phone}
+            onChange={set("phone")}
+            placeholder="9876543210"
+          />
         </div>
 
         <div className="field">
           <label>Opening hours</label>
-          <input className="input" value={form.timings} onChange={set('timings')} placeholder="Mon-Sat, 9:00 AM - 2:00 PM" />
+          <input
+            className="input"
+            value={form.timings}
+            onChange={set("timings")}
+            placeholder="Mon-Sat, 9:00 AM - 2:00 PM"
+          />
         </div>
 
         <div className="field">
           <ImagePicker
             value={form.photo}
-            onChange={(url, key) => setForm((prev) => Object.assign({}, prev, { photo: url, photoKey: key }))}
+            onChange={(url, key) =>
+              setForm((prev) =>
+                Object.assign({}, prev, { photo: url, photoKey: key }),
+              )
+            }
           />
         </div>
 
         <div className="field">
           <label>About</label>
-          <textarea className="textarea" rows={3} value={form.about} onChange={set('about')} placeholder="A short description shown on the public page." />
+          <textarea
+            className="textarea"
+            rows={3}
+            value={form.about}
+            onChange={set("about")}
+            placeholder="A short description shown on the public page."
+          />
         </div>
 
         <div className="field">
           <label>
             Admin user ID <span className="req">*</span>
           </label>
-          <input className="input" required value={form.adminUserId} onChange={set('adminUserId')} placeholder="vrindavan.admin" autoComplete="off" />
+          <input
+            className="input"
+            required
+            value={form.adminUserId}
+            onChange={set("adminUserId")}
+            placeholder="vrindavan.admin"
+            autoComplete="off"
+          />
         </div>
 
         <div className="field">
           <label>
             Admin email <span className="req">*</span>
           </label>
-          <input className="input" required type="email" value={form.adminEmail} onChange={set('adminEmail')} placeholder="clinic@example.com" />
+          <input
+            className="input"
+            required
+            type="email"
+            value={form.adminEmail}
+            onChange={set("adminEmail")}
+            placeholder="clinic@example.com"
+          />
         </div>
 
         <div className="field">
           <label>
-            {editing ? 'New password' : 'Password'} {editing ? null : <span className="req">*</span>}
+            {editing ? "New password" : "Password"}{" "}
+            {editing ? null : <span className="req">*</span>}
           </label>
           <input
             className="input"
             required={!editing}
             type="password"
             value={form.password}
-            onChange={set('password')}
-            placeholder={editing ? 'Leave blank to keep the current password' : 'At least 6 characters'}
+            onChange={set("password")}
+            placeholder={
+              editing
+                ? "Leave blank to keep the current password"
+                : "At least 6 characters"
+            }
             autoComplete="new-password"
           />
         </div>
@@ -7092,33 +8830,33 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
 function OwnerPanel({ go, notify }) {
   const [owner, setOwner] = useState(getStoredOwner());
   const [booting, setBooting] = useState(true);
-  const [tab, setTab] = useState('requests');
-  const [view, setView] = useState('cards');
-  const [search, setSearch] = useState('');
-  const [term, setTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [visibility, setVisibility] = useState('all');
+  const [tab, setTab] = useState("requests");
+  const [view, setView] = useState("cards");
+  const [search, setSearch] = useState("");
+  const [term, setTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [visibility, setVisibility] = useState("all");
   const [overview, setOverview] = useState(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [sidebar, setSidebar] = useState(false);
   const [formState, setFormState] = useState(null);
   const [detail, setDetail] = useState(null);
   const [confirm, setConfirm] = useState(null);
-  const [note, setNote] = useState('');
-  const [busyId, setBusyId] = useState('');
+  const [note, setNote] = useState("");
+  const [busyId, setBusyId] = useState("");
 
   const signOut = useCallback(
     (message) => {
-      setOwnerToken('');
+      setOwnerToken("");
       setStoredOwner(null);
       setOwner(null);
       setRows([]);
       setOverview(null);
-      if (message) notify(message, 'warn');
+      if (message) notify(message, "warn");
     },
-    [notify]
+    [notify],
   );
 
   // Verify a stored token against the server before trusting it.
@@ -7129,13 +8867,13 @@ function OwnerPanel({ go, notify }) {
         if (alive) setBooting(false);
         return;
       }
-      const data = await api('/owner/me', { owner: true });
+      const data = await api("/owner/me", { owner: true });
       if (!alive) return;
       if (data.success) {
         setOwner(data.owner);
         setStoredOwner(data.owner);
       } else {
-        setOwnerToken('');
+        setOwnerToken("");
         setStoredOwner(null);
         setOwner(null);
       }
@@ -7155,21 +8893,26 @@ function OwnerPanel({ go, notify }) {
   const load = useCallback(
     async (silent) => {
       if (!silent) setLoading(true);
-      setError('');
+      setError("");
 
       const params = [];
-      if (term) params.push('search=' + encodeURIComponent(term));
-      if (tab === 'listings') {
-        if (statusFilter !== 'all') params.push('status=' + encodeURIComponent(statusFilter));
-        if (visibility !== 'all') params.push('visibility=' + encodeURIComponent(visibility));
+      if (term) params.push("search=" + encodeURIComponent(term));
+      if (tab === "listings") {
+        if (statusFilter !== "all")
+          params.push("status=" + encodeURIComponent(statusFilter));
+        if (visibility !== "all")
+          params.push("visibility=" + encodeURIComponent(visibility));
       }
-      const base = tab === 'requests' ? '/owner/requests' : '/owner/clinics';
-      const path = base + (params.length ? '?' + params.join('&') : '');
+      const base = tab === "requests" ? "/owner/requests" : "/owner/clinics";
+      const path = base + (params.length ? "?" + params.join("&") : "");
 
-      const [list, counts] = await Promise.all([api(path, { owner: true }), api('/owner/overview', { owner: true })]);
+      const [list, counts] = await Promise.all([
+        api(path, { owner: true }),
+        api("/owner/overview", { owner: true }),
+      ]);
 
       if (list.unauthorized || counts.unauthorized) {
-        signOut('Your owner session expired. Please sign in again.');
+        signOut("Your owner session expired. Please sign in again.");
         setLoading(false);
         return;
       }
@@ -7178,7 +8921,7 @@ function OwnerPanel({ go, notify }) {
       if (counts.success) setOverview(counts.counts);
       setLoading(false);
     },
-    [tab, term, statusFilter, visibility, signOut]
+    [tab, term, statusFilter, visibility, signOut],
   );
 
   useEffect(() => {
@@ -7187,36 +8930,53 @@ function OwnerPanel({ go, notify }) {
 
   const act = async (clinic, kind, payload) => {
     setBusyId(clinic.clinicId);
-    const base = '/owner/clinics/' + encodeURIComponent(clinic.clinicId);
+    const base = "/owner/clinics/" + encodeURIComponent(clinic.clinicId);
     let data;
-    if (kind === 'approve') data = await api(base + '/approve', { method: 'PUT', owner: true });
-    else if (kind === 'reject') data = await api(base + '/reject', { method: 'PUT', owner: true, body: { note: payload || '' } });
-    else if (kind === 'hide') data = await api(base + '/visibility', { method: 'PUT', owner: true, body: { hidden: true } });
-    else if (kind === 'show') data = await api(base + '/visibility', { method: 'PUT', owner: true, body: { hidden: false } });
-    else if (kind === 'delete') data = await api(base, { method: 'DELETE', owner: true });
-    setBusyId('');
+    if (kind === "approve")
+      data = await api(base + "/approve", { method: "PUT", owner: true });
+    else if (kind === "reject")
+      data = await api(base + "/reject", {
+        method: "PUT",
+        owner: true,
+        body: { note: payload || "" },
+      });
+    else if (kind === "hide")
+      data = await api(base + "/visibility", {
+        method: "PUT",
+        owner: true,
+        body: { hidden: true },
+      });
+    else if (kind === "show")
+      data = await api(base + "/visibility", {
+        method: "PUT",
+        owner: true,
+        body: { hidden: false },
+      });
+    else if (kind === "delete")
+      data = await api(base, { method: "DELETE", owner: true });
+    setBusyId("");
 
     if (!data || !data.success) {
       if (data && data.unauthorized) {
-        signOut('Your owner session expired. Please sign in again.');
+        signOut("Your owner session expired. Please sign in again.");
         return;
       }
-      notify(data ? data.message : 'That action failed.', 'err');
+      notify(data ? data.message : "That action failed.", "err");
       return;
     }
-    notify(data.message, 'ok');
+    notify(data.message, "ok");
     setConfirm(null);
-    setNote('');
+    setNote("");
     setDetail(null);
     load(true);
   };
 
   const tapProps = (fn) => ({
-    role: 'button',
+    role: "button",
     tabIndex: 0,
     onClick: fn,
     onKeyDown: (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
+      if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         fn();
       }
@@ -7224,93 +8984,173 @@ function OwnerPanel({ go, notify }) {
   });
 
   if (booting) return <Loading label="Opening master panel" />;
-  if (!owner) return <OwnerLoginPage go={go} notify={notify} onSignedIn={setOwner} />;
+  if (!owner)
+    return <OwnerLoginPage go={go} notify={notify} onSignedIn={setOwner} />;
 
-  const counts = overview || { total: 0, pending: 0, approved: 0, rejected: 0, hidden: 0, listed: 0, bookingsToday: 0 };
+  const counts = overview || {
+    total: 0,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    hidden: 0,
+    listed: 0,
+    bookingsToday: 0,
+  };
 
   const tabs = [
-    ['overview', 'Overview', 'grid'],
-    ['requests', 'Approval requests', 'shield'],
-    ['listings', 'All listings', 'building'],
+    ["overview", "Overview", "grid"],
+    ["requests", "Approval requests", "shield"],
+    ["listings", "All listings", "building"],
   ];
 
   const statusMeta = (clinic) => {
-    if (clinic.status === 'pending') return ['pend', 'Pending'];
-    if (clinic.status === 'rejected') return ['rej', 'Rejected'];
-    if (clinic.hidden) return ['hid', 'Hidden'];
-    return ['appr', 'Listed'];
+    if (clinic.status === "pending") return ["pend", "Pending"];
+    if (clinic.status === "rejected") return ["rej", "Rejected"];
+    if (clinic.hidden) return ["hid", "Hidden"];
+    return ["appr", "Listed"];
   };
 
   const jumpTo = (nextTab, nextStatus, nextVisibility) => {
     setTab(nextTab);
-    setStatusFilter(nextStatus || 'all');
-    setVisibility(nextVisibility || 'all');
-    setSearch('');
+    setStatusFilter(nextStatus || "all");
+    setVisibility(nextVisibility || "all");
+    setSearch("");
   };
 
   const cards = [
-    { label: 'Pending requests', value: counts.pending, tone: 'c-amber', icon: 'clock', note: 'Waiting for your decision', go: () => jumpTo('requests') },
-    { label: 'Listed publicly', value: counts.listed, tone: 'c-green', icon: 'check', note: 'Live on the homepage', go: () => jumpTo('listings', 'approved', 'visible') },
-    { label: 'Hidden', value: counts.hidden, tone: 'c-blue', icon: 'ban', note: 'Approved but delisted', go: () => jumpTo('listings', 'approved', 'hidden') },
-    { label: 'Rejected', value: counts.rejected, tone: 'c-red', icon: 'close', note: 'Declined listings', go: () => jumpTo('listings', 'rejected') },
-    { label: 'Total clinics', value: counts.total, tone: 'c-teal', icon: 'building', note: 'Every registration', go: () => jumpTo('listings') },
-    { label: 'Bookings today', value: counts.bookingsToday, tone: 'c-violet', icon: 'users', note: 'Across all clinics', go: null },
+    {
+      label: "Pending requests",
+      value: counts.pending,
+      tone: "c-amber",
+      icon: "clock",
+      note: "Waiting for your decision",
+      go: () => jumpTo("requests"),
+    },
+    {
+      label: "Listed publicly",
+      value: counts.listed,
+      tone: "c-green",
+      icon: "check",
+      note: "Live on the homepage",
+      go: () => jumpTo("listings", "approved", "visible"),
+    },
+    {
+      label: "Hidden",
+      value: counts.hidden,
+      tone: "c-blue",
+      icon: "ban",
+      note: "Approved but delisted",
+      go: () => jumpTo("listings", "approved", "hidden"),
+    },
+    {
+      label: "Rejected",
+      value: counts.rejected,
+      tone: "c-red",
+      icon: "close",
+      note: "Declined listings",
+      go: () => jumpTo("listings", "rejected"),
+    },
+    {
+      label: "Total clinics",
+      value: counts.total,
+      tone: "c-teal",
+      icon: "building",
+      note: "Every registration",
+      go: () => jumpTo("listings"),
+    },
+    {
+      label: "Bookings today",
+      value: counts.bookingsToday,
+      tone: "c-violet",
+      icon: "users",
+      note: "Across all clinics",
+      go: null,
+    },
   ];
 
   const actionsFor = (clinic) => {
     const busy = busyId === clinic.clinicId;
     const buttons = [];
 
-    if (clinic.status !== 'approved') {
+    if (clinic.status !== "approved") {
       buttons.push(
-        <button key="ap" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(clinic, 'approve')}>
+        <button
+          key="ap"
+          className="btn btn-primary btn-sm"
+          disabled={busy}
+          onClick={() => act(clinic, "approve")}
+        >
           <Icon name="check" size={15} /> Approve
-        </button>
+        </button>,
       );
     }
-    if (clinic.status === 'pending') {
+    if (clinic.status === "pending") {
       buttons.push(
         <button
           key="rj"
           className="btn btn-outline btn-sm"
           disabled={busy}
           onClick={() => {
-            setNote('');
-            setConfirm({ kind: 'reject', clinic });
+            setNote("");
+            setConfirm({ kind: "reject", clinic });
           }}
         >
           <Icon name="ban" size={15} /> Reject
-        </button>
+        </button>,
       );
     }
-    if (clinic.status === 'approved') {
+    if (clinic.status === "approved") {
       buttons.push(
         clinic.hidden ? (
-          <button key="sh" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(clinic, 'show')}>
+          <button
+            key="sh"
+            className="btn btn-primary btn-sm"
+            disabled={busy}
+            onClick={() => act(clinic, "show")}
+          >
             <Icon name="undo" size={15} /> Unhide
           </button>
         ) : (
-          <button key="hd" className="btn btn-soft btn-sm" disabled={busy} onClick={() => act(clinic, 'hide')}>
+          <button
+            key="hd"
+            className="btn btn-soft btn-sm"
+            disabled={busy}
+            onClick={() => act(clinic, "hide")}
+          >
             <Icon name="ban" size={15} /> Hide
           </button>
-        )
+        ),
       );
     }
 
     buttons.push(
-      <button key="ed" className="btn btn-soft btn-sm" disabled={busy} onClick={() => setFormState({ clinic })}>
+      <button
+        key="ed"
+        className="btn btn-soft btn-sm"
+        disabled={busy}
+        onClick={() => setFormState({ clinic })}
+      >
         <Icon name="settings" size={15} /> Edit
-      </button>
+      </button>,
     );
     buttons.push(
-      <button key="dt" className="btn btn-ghost btn-sm" onClick={() => setDetail(clinic)}>
+      <button
+        key="dt"
+        className="btn btn-ghost btn-sm"
+        onClick={() => setDetail(clinic)}
+      >
         <Icon name="list" size={15} /> Details
-      </button>
+      </button>,
     );
     buttons.push(
-      <button key="dl" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirm({ kind: 'delete', clinic })}>
+      <button
+        key="dl"
+        className="btn btn-ghost btn-sm"
+        disabled={busy}
+        onClick={() => setConfirm({ kind: "delete", clinic })}
+      >
         <Icon name="close" size={15} /> Delete
-      </button>
+      </button>,
     );
     return buttons;
   };
@@ -7319,36 +9159,41 @@ function OwnerPanel({ go, notify }) {
     const [tone, label] = statusMeta(clinic);
     return (
       <Reveal key={clinic.clinicId} delay={Math.min(index, 8) * 40}>
-        <article className={'own-card ' + tone}>
+        <article className={"own-card " + tone}>
           <div className="own-card-top">
             <Avatar clinic={clinic} />
             <div className="own-card-id">
               <b title={clinic.clinicName}>{clinic.clinicName}</b>
               <span title={clinic.doctorName}>{clinic.doctorName}</span>
             </div>
-            <span className={'own-st ' + tone}>{label}</span>
+            <span className={"own-st " + tone}>{label}</span>
           </div>
 
           <div className="own-tags">
             <span className="badge badge-general">
-              <Icon name="stetho" size={12} /> {clinic.specialization || 'General Physician'}
+              <Icon name="stetho" size={12} />{" "}
+              {clinic.specialization || "General Physician"}
             </span>
             <span className="badge badge-soft">
               <Icon name="ticket" size={12} /> {clinic.appointments} total
             </span>
             <span className="badge badge-soft">
-              <Icon name="calendar" size={12} /> {clinic.appointmentsToday} today
+              <Icon name="calendar" size={12} /> {clinic.appointmentsToday}{" "}
+              today
             </span>
           </div>
 
           <div className="own-meta">
             <div>
               <Icon name="pin" size={15} />
-              <span>{[clinic.address, clinic.city].filter(Boolean).join(', ') || 'No address on file'}</span>
+              <span>
+                {[clinic.address, clinic.city].filter(Boolean).join(", ") ||
+                  "No address on file"}
+              </span>
             </div>
             <div>
               <Icon name="phone" size={15} />
-              <span>{clinic.phone || 'No phone'}</span>
+              <span>{clinic.phone || "No phone"}</span>
             </div>
             <div>
               <Icon name="mail" size={15} />
@@ -7392,7 +9237,7 @@ function OwnerPanel({ go, notify }) {
                 </td>
                 <td>{clinic.doctorName}</td>
                 <td>
-                  {clinic.city || '-'}
+                  {clinic.city || "-"}
                   <span className="own-cell-sub">{clinic.address}</span>
                 </td>
                 <td>
@@ -7401,14 +9246,19 @@ function OwnerPanel({ go, notify }) {
                 </td>
                 <td>{clinic.adminUserId}</td>
                 <td>
-                  <span className={'own-st ' + tone}>{label}</span>
+                  <span className={"own-st " + tone}>{label}</span>
                 </td>
                 <td>
                   {clinic.appointments}
-                  <span className="own-cell-sub">{clinic.appointmentsToday} today</span>
+                  <span className="own-cell-sub">
+                    {clinic.appointmentsToday} today
+                  </span>
                 </td>
                 <td>
-                  <div className="own-actions" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+                  <div
+                    className="own-actions"
+                    style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}
+                  >
                     {actionsFor(clinic)}
                   </div>
                 </td>
@@ -7432,15 +9282,25 @@ function OwnerPanel({ go, notify }) {
         />
       </div>
 
-      {tab === 'listings' ? (
+      {tab === "listings" ? (
         <>
-          <select className="select" style={{ maxWidth: 170 }} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <select
+            className="select"
+            style={{ maxWidth: 170 }}
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
             <option value="all">All statuses</option>
             <option value="pending">Pending</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
           </select>
-          <select className="select" style={{ maxWidth: 170 }} value={visibility} onChange={(event) => setVisibility(event.target.value)}>
+          <select
+            className="select"
+            style={{ maxWidth: 170 }}
+            value={visibility}
+            onChange={(event) => setVisibility(event.target.value)}
+          >
             <option value="all">Visible and hidden</option>
             <option value="visible">On the homepage</option>
             <option value="hidden">Hidden only</option>
@@ -7449,10 +9309,16 @@ function OwnerPanel({ go, notify }) {
       ) : null}
 
       <div className="own-seg">
-        <button className={view === 'cards' ? 'on' : ''} onClick={() => setView('cards')}>
+        <button
+          className={view === "cards" ? "on" : ""}
+          onClick={() => setView("cards")}
+        >
           <Icon name="grid" size={15} /> Cards
         </button>
-        <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
+        <button
+          className={view === "list" ? "on" : ""}
+          onClick={() => setView("list")}
+        >
           <Icon name="list" size={15} /> List
         </button>
       </div>
@@ -7460,32 +9326,44 @@ function OwnerPanel({ go, notify }) {
   );
 
   const emptyState = () => {
-    if (tab === 'requests') {
+    if (tab === "requests") {
       return (
         <div className="own-empty">
           <Icon name="check" size={30} />
-          <b>{term ? 'No pending request matches that search' : 'No requests waiting'}</b>
-          {term ? 'Try a clinic name, doctor, email, mobile number or admin user ID.' : 'Every registration has been reviewed. New requests appear here and are emailed to you.'}
+          <b>
+            {term
+              ? "No pending request matches that search"
+              : "No requests waiting"}
+          </b>
+          {term
+            ? "Try a clinic name, doctor, email, mobile number or admin user ID."
+            : "Every registration has been reviewed. New requests appear here and are emailed to you."}
         </div>
       );
     }
     return (
       <div className="own-empty">
         <Icon name="building" size={30} />
-        <b>{term || statusFilter !== 'all' || visibility !== 'all' ? 'No listing matches those filters' : 'No clinics yet'}</b>
-        {term || statusFilter !== 'all' || visibility !== 'all'
-          ? 'Clear the search or filters to see everything.'
-          : 'Use Add listing to create one yourself, or wait for a clinic to register.'}
+        <b>
+          {term || statusFilter !== "all" || visibility !== "all"
+            ? "No listing matches those filters"
+            : "No clinics yet"}
+        </b>
+        {term || statusFilter !== "all" || visibility !== "all"
+          ? "Clear the search or filters to see everything."
+          : "Use Add listing to create one yourself, or wait for a clinic to register."}
       </div>
     );
   };
 
   return (
     <div className="adm">
-      {sidebar ? <div className="adm-scrim" onClick={() => setSidebar(false)} /> : null}
+      {sidebar ? (
+        <div className="adm-scrim" onClick={() => setSidebar(false)} />
+      ) : null}
 
-      <aside className={'adm-side' + (sidebar ? ' open' : '')}>
-        <button className="brand" onClick={() => go('/')}>
+      <aside className={"adm-side" + (sidebar ? " open" : "")}>
+        <button className="brand" onClick={() => go("/")}>
           <span className="brand-mark">
             <Cross size={18} />
           </span>
@@ -7506,14 +9384,16 @@ function OwnerPanel({ go, notify }) {
           {tabs.map(([id, label, icon]) => (
             <button
               key={id}
-              className={tab === id ? 'on' : ''}
+              className={tab === id ? "on" : ""}
               onClick={() => {
                 setTab(id);
                 setSidebar(false);
               }}
             >
               <Icon name={icon} size={17} /> {label}
-              {id === 'requests' && counts.pending ? <span className="count">{counts.pending}</span> : null}
+              {id === "requests" && counts.pending ? (
+                <span className="count">{counts.pending}</span>
+              ) : null}
             </button>
           ))}
           <button
@@ -7527,10 +9407,10 @@ function OwnerPanel({ go, notify }) {
         </nav>
 
         <div className="adm-side-foot">
-          <button onClick={() => go('/')}>
+          <button onClick={() => go("/")}>
             <Icon name="right" size={16} /> View public homepage
           </button>
-          <button onClick={() => signOut('Signed out of the master panel.')}>
+          <button onClick={() => signOut("Signed out of the master panel.")}>
             <Icon name="logout" size={16} /> Sign out
           </button>
         </div>
@@ -7539,17 +9419,21 @@ function OwnerPanel({ go, notify }) {
       <main className="adm-main">
         <div className="adm-top">
           <div className="row">
-            <button className="btn-icon adm-burger" onClick={() => setSidebar(true)} aria-label="Open menu">
+            <button
+              className="btn-icon adm-burger"
+              onClick={() => setSidebar(true)}
+              aria-label="Open menu"
+            >
               <Icon name="menu" size={19} />
             </button>
             <div>
               <h1>{tabs.find(([id]) => id === tab)[1]}</h1>
               <p className="sub">
-                {tab === 'requests'
-                  ? counts.pending + ' request(s) awaiting approval'
-                  : tab === 'listings'
-                    ? rows.length + ' listing(s) shown'
-                    : 'Platform-wide listing control'}
+                {tab === "requests"
+                  ? counts.pending + " request(s) awaiting approval"
+                  : tab === "listings"
+                    ? rows.length + " listing(s) shown"
+                    : "Platform-wide listing control"}
               </p>
             </div>
           </div>
@@ -7558,7 +9442,10 @@ function OwnerPanel({ go, notify }) {
             <button className="btn btn-soft btn-sm" onClick={() => load()}>
               <Icon name="refresh" size={15} /> Refresh
             </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setFormState({ clinic: null })}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setFormState({ clinic: null })}
+            >
               <Icon name="plus" size={15} /> Add listing
             </button>
           </div>
@@ -7567,13 +9454,13 @@ function OwnerPanel({ go, notify }) {
         <div className="adm-body">
           {error ? <Alert kind="err">{error}</Alert> : null}
 
-          {tab === 'overview' ? (
+          {tab === "overview" ? (
             <>
               <div className="stat-grid">
                 {cards.map((card) => (
                   <div
                     key={card.label}
-                    className={'stat ' + card.tone + (card.go ? ' tap' : '')}
+                    className={"stat " + card.tone + (card.go ? " tap" : "")}
                     {...(card.go ? tapProps(card.go) : {})}
                   >
                     <span className="stat-ico">
@@ -7592,14 +9479,24 @@ function OwnerPanel({ go, notify }) {
 
               {counts.pending ? (
                 <div className="own-note">
-                  {counts.pending} clinic listing(s) are waiting for your approval. Until you approve them they stay off the
-                  public homepage and cannot take online bookings.
+                  {counts.pending} clinic listing(s) are waiting for your
+                  approval. Until you approve them they stay off the public
+                  homepage and cannot take online bookings.
                 </div>
               ) : null}
 
-              <div className="own-note" style={{ background: '#f0f9ff', borderColor: '#7dd3fc', color: '#075985' }}>
-                Hiding a listing removes it from the public homepage only. The clinic keeps working, so patients who already
-                hold a token can still track the live queue. Rejecting is the decision to keep it off the platform.
+              <div
+                className="own-note"
+                style={{
+                  background: "#f0f9ff",
+                  borderColor: "#7dd3fc",
+                  color: "#075985",
+                }}
+              >
+                Hiding a listing removes it from the public homepage only. The
+                clinic keeps working, so patients who already hold a token can
+                still track the live queue. Rejecting is the decision to keep it
+                off the platform.
               </div>
             </>
           ) : (
@@ -7610,7 +9507,7 @@ function OwnerPanel({ go, notify }) {
                 <SkeletonCards count={6} />
               ) : rows.length === 0 ? (
                 emptyState()
-              ) : view === 'cards' ? (
+              ) : view === "cards" ? (
                 <div className="own-grid">{rows.map(renderCard)}</div>
               ) : (
                 renderTable()
@@ -7626,14 +9523,16 @@ function OwnerPanel({ go, notify }) {
           close={() => setFormState(null)}
           notify={notify}
           onSaved={() => load(true)}
-          onExpired={() => signOut('Your owner session expired. Please sign in again.')}
+          onExpired={() =>
+            signOut("Your owner session expired. Please sign in again.")
+          }
         />
       ) : null}
 
       {detail ? (
         <Modal
           title={detail.clinicName}
-          subtitle={detail.doctorName + ' - ' + detail.specialization}
+          subtitle={detail.doctorName + " - " + detail.specialization}
           onClose={() => setDetail(null)}
           footer={
             <button className="btn btn-ghost" onClick={() => setDetail(null)}>
@@ -7644,24 +9543,38 @@ function OwnerPanel({ go, notify }) {
           <dl className="kv">
             <dt>Status</dt>
             <dd>
-              <span className={'own-st ' + statusMeta(detail)[0]}>{statusMeta(detail)[1]}</span>
+              <span className={"own-st " + statusMeta(detail)[0]}>
+                {statusMeta(detail)[1]}
+              </span>
             </dd>
             <dt>Clinic ID</dt>
             <dd>{detail.clinicId}</dd>
             <dt>Address</dt>
-            <dd>{[detail.address, detail.city].filter(Boolean).join(', ') || '-'}</dd>
+            <dd>
+              {[detail.address, detail.city].filter(Boolean).join(", ") || "-"}
+            </dd>
             <dt>Clinic phone</dt>
-            <dd>{detail.phone || '-'}</dd>
+            <dd>{detail.phone || "-"}</dd>
             <dt>Opening hours</dt>
-            <dd>{detail.timings || '-'}</dd>
+            <dd>{detail.timings || "-"}</dd>
             <dt>Admin user ID</dt>
             <dd>{detail.adminUserId}</dd>
             <dt>Admin email</dt>
             <dd>{detail.adminEmail}</dd>
             <dt>Registered</dt>
-            <dd>{detail.createdAt ? fmtDate(String(detail.createdAt).slice(0, 10)) : '-'}</dd>
+            <dd>
+              {detail.createdAt
+                ? fmtDate(String(detail.createdAt).slice(0, 10))
+                : "-"}
+            </dd>
             <dt>Decision</dt>
-            <dd>{detail.decidedAt ? fmtDate(String(detail.decidedAt).slice(0, 10)) + ' by ' + (detail.decidedBy || 'owner') : 'Not decided yet'}</dd>
+            <dd>
+              {detail.decidedAt
+                ? fmtDate(String(detail.decidedAt).slice(0, 10)) +
+                  " by " +
+                  (detail.decidedBy || "owner")
+                : "Not decided yet"}
+            </dd>
             {detail.rejectionNote ? (
               <>
                 <dt>Rejection note</dt>
@@ -7673,22 +9586,29 @@ function OwnerPanel({ go, notify }) {
               {detail.appointments} ({detail.appointmentsToday} today)
             </dd>
             <dt>About</dt>
-            <dd>{detail.about || '-'}</dd>
+            <dd>{detail.about || "-"}</dd>
           </dl>
         </Modal>
       ) : null}
 
-      {confirm && confirm.kind === 'reject' ? (
+      {confirm && confirm.kind === "reject" ? (
         <Modal
           title="Reject this listing request"
           subtitle={confirm.clinic.clinicName}
           onClose={() => setConfirm(null)}
           footer={
             <>
-              <button className="btn btn-ghost" onClick={() => setConfirm(null)}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setConfirm(null)}
+              >
                 Cancel
               </button>
-              <button className="btn btn-danger" disabled={busyId === confirm.clinic.clinicId} onClick={() => act(confirm.clinic, 'reject', note)}>
+              <button
+                className="btn btn-danger"
+                disabled={busyId === confirm.clinic.clinicId}
+                onClick={() => act(confirm.clinic, "reject", note)}
+              >
                 <Icon name="ban" size={16} /> Reject listing
               </button>
             </>
@@ -7696,8 +9616,9 @@ function OwnerPanel({ go, notify }) {
         >
           <div className="form-grid">
             <p className="small muted">
-              The clinic keeps its admin account and can sign in, but it will not appear on the public homepage. Your reason
-              is emailed to {confirm.clinic.adminEmail}.
+              The clinic keeps its admin account and can sign in, but it will
+              not appear on the public homepage. Your reason is emailed to{" "}
+              {confirm.clinic.adminEmail}.
             </p>
             <div className="field">
               <label>Reason (optional, included in the email)</label>
@@ -7713,25 +9634,34 @@ function OwnerPanel({ go, notify }) {
         </Modal>
       ) : null}
 
-      {confirm && confirm.kind === 'delete' ? (
+      {confirm && confirm.kind === "delete" ? (
         <Modal
           title="Delete this listing permanently"
           subtitle={confirm.clinic.clinicName}
           onClose={() => setConfirm(null)}
           footer={
             <>
-              <button className="btn btn-ghost" onClick={() => setConfirm(null)}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setConfirm(null)}
+              >
                 Cancel
               </button>
-              <button className="btn btn-danger" disabled={busyId === confirm.clinic.clinicId} onClick={() => act(confirm.clinic, 'delete')}>
+              <button
+                className="btn btn-danger"
+                disabled={busyId === confirm.clinic.clinicId}
+                onClick={() => act(confirm.clinic, "delete")}
+              >
                 <Icon name="close" size={16} /> Delete everything
               </button>
             </>
           }
         >
           <Alert kind="err">
-            This removes the clinic, its admin login, all {confirm.clinic.appointments} appointment record(s) and its queue
-            counters. It cannot be undone. To take a clinic off the homepage without losing data, use Hide instead.
+            This removes the clinic, its admin login, all{" "}
+            {confirm.clinic.appointments} appointment record(s) and its queue
+            counters. It cannot be undone. To take a clinic off the homepage
+            without losing data, use Hide instead.
           </Alert>
         </Modal>
       ) : null}
@@ -7742,7 +9672,7 @@ function OwnerPanel({ go, notify }) {
 export default function App() {
   const [route, go] = useHashRoute();
   const { items, notify, dismiss } = useToasts();
-  const [health, setHealth] = useState('checking');
+  const [health, setHealth] = useState("checking");
 
   useEffect(() => {
     injectStyles();
@@ -7750,9 +9680,9 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    api('/health').then((data) => {
+    api("/health").then((data) => {
       if (!alive) return;
-      setHealth(data.success ? 'up' : 'down');
+      setHealth(data.success ? "up" : "down");
     });
     return () => {
       alive = false;
@@ -7764,30 +9694,44 @@ export default function App() {
     setStoredClinic(clinic);
   }, []);
 
-  const chrome = route.name === 'home' || route.name === 'booking' || route.name === 'track';
+  const chrome =
+    route.name === "home" || route.name === "booking" || route.name === "track";
 
   return (
     <div className="mcf">
       {chrome ? <Navbar go={go} active={route.name} /> : null}
 
-      {health === 'down' ? (
+      {health === "down" ? (
         <div className="container" style={{ paddingTop: 16 }}>
           <Alert kind="warn">
-            The frontend cannot reach the API at {API}. Start the backend with <b>nodemon Server.js</b> (it listens on port 5000)
-            or set VITE_API_URL in your frontend .env file.
+            The frontend cannot reach the API at {API}. Start the backend with{" "}
+            <b>nodemon Server.js</b> (it listens on port 5000) or set
+            VITE_API_URL in your frontend .env file.
           </Alert>
         </div>
       ) : null}
 
-      <ErrorBoundary key={route.name + ':' + (route.id || '')}>
-        {route.name === 'home' ? <HomePage go={go} /> : null}
-        {route.name === 'booking' ? <BookingPage clinicId={route.id} go={go} notify={notify} /> : null}
-        {route.name === 'track' ? <QueueTrackPage clinicId={route.id} go={go} /> : null}
-        {route.name === 'register' ? <RegisterPage go={go} notify={notify} onSession={onSession} /> : null}
-        {route.name === 'login' ? <LoginPage go={go} notify={notify} onSession={onSession} /> : null}
-        {route.name === 'forgot' ? <ForgotPage go={go} notify={notify} onSession={onSession} /> : null}
-        {route.name === 'admin' ? <AdminDashboard routeClinicId={route.id} go={go} notify={notify} /> : null}
-        {route.name === 'owner' ? <OwnerPanel go={go} notify={notify} /> : null}
+      <ErrorBoundary key={route.name + ":" + (route.id || "")}>
+        {route.name === "home" ? <HomePage go={go} /> : null}
+        {route.name === "booking" ? (
+          <BookingPage clinicId={route.id} go={go} notify={notify} />
+        ) : null}
+        {route.name === "track" ? (
+          <QueueTrackPage clinicId={route.id} go={go} />
+        ) : null}
+        {route.name === "register" ? (
+          <RegisterPage go={go} notify={notify} onSession={onSession} />
+        ) : null}
+        {route.name === "login" ? (
+          <LoginPage go={go} notify={notify} onSession={onSession} />
+        ) : null}
+        {route.name === "forgot" ? (
+          <ForgotPage go={go} notify={notify} onSession={onSession} />
+        ) : null}
+        {route.name === "admin" ? (
+          <AdminDashboard routeClinicId={route.id} go={go} notify={notify} />
+        ) : null}
+        {route.name === "owner" ? <OwnerPanel go={go} notify={notify} /> : null}
       </ErrorBoundary>
 
       {chrome ? <Footer go={go} /> : null}
