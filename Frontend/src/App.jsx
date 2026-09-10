@@ -141,6 +141,516 @@ const setStoredOwner = (value) => {
   }
 };
 
+/* ---------------------------------------------------------- photo upload -- */
+
+const MAX_UPLOAD_BYTES = 900 * 1024;
+const MAX_PHOTO_EDGE = 900;
+
+function readAsImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('That file could not be read.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('That file is not a readable image.'));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function canvasToBlob(canvas, quality) {
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality));
+}
+
+/* Shrinks a picture in the BROWSER before it is uploaded. This matters: a photo
+   straight off a phone is 3-6 MB, so without this step almost every real upload
+   would bounce off the 900 KB limit. Files that already fit are passed through
+   untouched, which keeps PNG transparency and animated GIFs intact. */
+async function fitImageFile(file) {
+  const supported = /^image\/(jpeg|png|webp|gif)$/.test(file.type);
+  if (supported && file.size <= MAX_UPLOAD_BYTES) return file;
+  if (file.type === 'image/gif') throw new Error('That GIF is over 900 KB. Please choose a smaller one.');
+
+  const img = await readAsImage(file);
+  const longest = Math.max(img.width || 1, img.height || 1);
+  const scale = Math.min(1, MAX_PHOTO_EDGE / longest);
+  const width = Math.max(1, Math.round((img.width || MAX_PHOTO_EDGE) * scale));
+  const height = Math.max(1, Math.round((img.height || MAX_PHOTO_EDGE) * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; // flatten transparency, JPEG has no alpha channel
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  let quality = 0.85;
+  let blob = await canvasToBlob(canvas, quality);
+  while (blob && blob.size > MAX_UPLOAD_BYTES && quality > 0.4) {
+    quality -= 0.12;
+    blob = await canvasToBlob(canvas, quality);
+  }
+  if (!blob) throw new Error('That image could not be converted.');
+  return blob;
+}
+
+/* Posts the raw bytes - no multipart, no base64. The server stores them in
+   Cloudflare R2 and hands back the URL that gets saved in MongoDB. */
+async function uploadImage(blob) {
+  try {
+    const response = await fetch(API + '/upload/clinic-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      return { success: false, message: data.message || 'The upload failed (' + response.status + ').' };
+    }
+    return data;
+  } catch (_error) {
+    return { success: false, message: 'Could not reach the server to upload that photo.' };
+  }
+}
+
+/* ============================================================================
+ * QR ENCODER - byte mode, error-correction level H (30% recovery).
+ * Zero dependencies and zero network calls: a QR symbol is a pure function of
+ * the text, so no third-party generator API is involved. Level H is chosen so
+ * the clinic name badge can sit in the middle without breaking the scan.
+ * Versions 1..20 are supported (up to 452 bytes), far more than a booking URL.
+ * ========================================================================== */
+
+var QR_EXP = [];
+var QR_LOG = [];
+(function () {
+  var x = 1;
+  for (var i = 0; i < 255; i++) {
+    QR_EXP[i] = x;
+    QR_LOG[x] = i;
+    x = x << 1;
+    if (x & 0x100) x = x ^ 0x11d;
+  }
+  for (var j = 255; j < 512; j++) QR_EXP[j] = QR_EXP[j - 255];
+})();
+
+function qrMul(a, b) {
+  if (a === 0 || b === 0) return 0;
+  return QR_EXP[QR_LOG[a] + QR_LOG[b]];
+}
+
+/* [ec codewords per block, total blocks] for level H, versions 1..20. The data
+   capacity is derived, never hardcoded: total codewords come from counting the
+   free modules in the symbol, so the two can never drift apart. */
+var QR_H = [
+  [17, 1], [28, 1], [22, 2], [16, 4], [22, 4], [28, 4], [26, 5], [26, 6],
+  [24, 8], [28, 8], [24, 11], [28, 11], [22, 16], [24, 16], [24, 18],
+  [30, 16], [28, 19], [28, 21], [26, 25], [28, 25]
+];
+
+var QR_ALIGN = [
+  [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42],
+  [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62],
+  [6, 26, 46, 66], [6, 26, 48, 70], [6, 26, 50, 74], [6, 30, 54, 78],
+  [6, 30, 56, 82], [6, 30, 58, 86], [6, 34, 62, 90]
+];
+
+function qrGrid(size, value) {
+  var out = [];
+  for (var i = 0; i < size; i++) {
+    var row = [];
+    for (var j = 0; j < size; j++) row.push(value);
+    out.push(row);
+  }
+  return out;
+}
+
+/* Every module that is NOT payload: finders, separators, timing, alignment,
+   format/version areas and the dark module. */
+function qrReserved(version) {
+  var size = version * 4 + 17;
+  var res = qrGrid(size, false);
+  function block(r, c, h, w) {
+    for (var i = 0; i < h; i++) {
+      for (var j = 0; j < w; j++) {
+        var rr = r + i;
+        var cc = c + j;
+        if (rr >= 0 && rr < size && cc >= 0 && cc < size) res[rr][cc] = true;
+      }
+    }
+  }
+  block(0, 0, 8, 8);
+  block(0, size - 8, 8, 8);
+  block(size - 8, 0, 8, 8);
+  block(6, 0, 1, size);
+  block(0, 6, size, 1);
+  block(8, 0, 1, 9);
+  block(8, size - 8, 1, 8);
+  block(0, 8, 9, 1);
+  block(size - 8, 8, 8, 1);
+  var centers = QR_ALIGN[version - 1];
+  for (var a = 0; a < centers.length; a++) {
+    for (var b = 0; b < centers.length; b++) {
+      var r = centers[a];
+      var c = centers[b];
+      var nearFinder =
+        (r <= 8 && c <= 8) || (r <= 8 && c >= size - 9) || (r >= size - 9 && c <= 8);
+      if (nearFinder) continue;
+      block(r - 2, c - 2, 5, 5);
+    }
+  }
+  if (version >= 7) {
+    block(size - 11, 0, 3, 6);
+    block(0, size - 11, 6, 3);
+  }
+  return res;
+}
+
+function qrTotalCodewords(version) {
+  var size = version * 4 + 17;
+  var res = qrReserved(version);
+  var free = 0;
+  for (var i = 0; i < size; i++) {
+    for (var j = 0; j < size; j++) if (!res[i][j]) free++;
+  }
+  return Math.floor(free / 8);
+}
+
+function qrBlockPlan(version) {
+  var spec = QR_H[version - 1];
+  var ecLen = spec[0];
+  var blocks = spec[1];
+  var total = qrTotalCodewords(version);
+  var dataTotal = total - ecLen * blocks;
+  var shortLen = Math.floor(dataTotal / blocks);
+  var longCount = dataTotal % blocks;
+  return {
+    ecLen: ecLen,
+    blocks: blocks,
+    total: total,
+    dataTotal: dataTotal,
+    shortLen: shortLen,
+    shortCount: blocks - longCount,
+    longCount: longCount
+  };
+}
+
+function qrRsPoly(degree) {
+  var poly = [1];
+  for (var i = 0; i < degree; i++) {
+    var next = [];
+    for (var z = 0; z <= poly.length; z++) next.push(0);
+    for (var j = 0; j < poly.length; j++) {
+      next[j] ^= poly[j];
+      next[j + 1] ^= qrMul(poly[j], QR_EXP[i]);
+    }
+    poly = next;
+  }
+  return poly;
+}
+
+function qrRsEncode(data, ecLen) {
+  var gen = qrRsPoly(ecLen);
+  var res = [];
+  for (var z = 0; z < ecLen; z++) res.push(0);
+  for (var i = 0; i < data.length; i++) {
+    var factor = data[i] ^ res[0];
+    res.shift();
+    res.push(0);
+    if (factor !== 0) {
+      for (var j = 0; j < ecLen; j++) res[j] ^= qrMul(gen[j + 1], factor);
+    }
+  }
+  return res;
+}
+
+function qrUtf8Bytes(text) {
+  var out = [];
+  var s = String(text);
+  for (var i = 0; i < s.length; i++) {
+    var code = s.charCodeAt(i);
+    if (code < 0x80) {
+      out.push(code);
+    } else if (code < 0x800) {
+      out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+      var pair = 0x10000 + ((code - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
+      i++;
+      out.push(
+        0xf0 | (pair >> 18),
+        0x80 | ((pair >> 12) & 0x3f),
+        0x80 | ((pair >> 6) & 0x3f),
+        0x80 | (pair & 0x3f)
+      );
+    } else {
+      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  return out;
+}
+
+function qrPickVersion(byteLen) {
+  for (var v = 1; v <= 20; v++) {
+    var plan = qrBlockPlan(v);
+    var countBits = v < 10 ? 8 : 16;
+    var needed = Math.ceil((4 + countBits + byteLen * 8) / 8);
+    if (needed <= plan.dataTotal) return v;
+  }
+  return 0;
+}
+
+function qrCodewords(bytes, version) {
+  var plan = qrBlockPlan(version);
+  var countBits = version < 10 ? 8 : 16;
+  var bits = [];
+  function push(value, len) {
+    for (var i = len - 1; i >= 0; i--) bits.push((value >> i) & 1);
+  }
+  push(4, 4);
+  push(bytes.length, countBits);
+  for (var i = 0; i < bytes.length; i++) push(bytes[i], 8);
+  var capacity = plan.dataTotal * 8;
+  var terminator = Math.min(4, capacity - bits.length);
+  for (var t = 0; t < terminator; t++) bits.push(0);
+  while (bits.length % 8 !== 0) bits.push(0);
+  var data = [];
+  for (var b = 0; b < bits.length; b += 8) {
+    var byteVal = 0;
+    for (var k = 0; k < 8; k++) byteVal = (byteVal << 1) | bits[b + k];
+    data.push(byteVal);
+  }
+  var pads = [0xec, 0x11];
+  var p = 0;
+  while (data.length < plan.dataTotal) {
+    data.push(pads[p % 2]);
+    p++;
+  }
+
+  var blocks = [];
+  var offset = 0;
+  for (var n = 0; n < plan.blocks; n++) {
+    var len = n < plan.shortCount ? plan.shortLen : plan.shortLen + 1;
+    var chunk = data.slice(offset, offset + len);
+    offset += len;
+    blocks.push({ data: chunk, ec: qrRsEncode(chunk, plan.ecLen) });
+  }
+
+  var out = [];
+  var maxData = plan.shortLen + (plan.longCount > 0 ? 1 : 0);
+  for (var d = 0; d < maxData; d++) {
+    for (var q = 0; q < blocks.length; q++) {
+      if (d < blocks[q].data.length) out.push(blocks[q].data[d]);
+    }
+  }
+  for (var e = 0; e < plan.ecLen; e++) {
+    for (var w = 0; w < blocks.length; w++) out.push(blocks[w].ec[e]);
+  }
+  return out;
+}
+
+function qrFormatBits(mask) {
+  var data = (2 << 3) | mask; /* 2 = level H indicator */
+  var v = data << 10;
+  for (var i = 14; i >= 10; i--) {
+    if (v & (1 << i)) v = v ^ (0x537 << (i - 10));
+  }
+  return (((data << 10) | v) ^ 0x5412) & 0x7fff;
+}
+
+function qrVersionBits(version) {
+  var v = version << 12;
+  for (var i = 17; i >= 12; i--) {
+    if (v & (1 << i)) v = v ^ (0x1f25 << (i - 12));
+  }
+  return ((version << 12) | v) & 0x3ffff;
+}
+
+function qrMaskBit(mask, i, j) {
+  switch (mask) {
+    case 0: return (i + j) % 2 === 0;
+    case 1: return i % 2 === 0;
+    case 2: return j % 3 === 0;
+    case 3: return (i + j) % 3 === 0;
+    case 4: return (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0;
+    case 5: return ((i * j) % 2) + ((i * j) % 3) === 0;
+    case 6: return (((i * j) % 2) + ((i * j) % 3)) % 2 === 0;
+    default: return ((((i + j) % 2) + ((i * j) % 3)) % 2) === 0;
+  }
+}
+
+function qrDrawFunctions(mod, version) {
+  var size = version * 4 + 17;
+  function finder(r, c) {
+    for (var i = -1; i <= 7; i++) {
+      for (var j = -1; j <= 7; j++) {
+        var rr = r + i;
+        var cc = c + j;
+        if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
+        var edge = i === 0 || i === 6 || j === 0 || j === 6;
+        var core = i >= 2 && i <= 4 && j >= 2 && j <= 4;
+        mod[rr][cc] = edge || core;
+      }
+    }
+  }
+  finder(0, 0);
+  finder(0, size - 7);
+  finder(size - 7, 0);
+  for (var t = 8; t < size - 8; t++) {
+    var on = t % 2 === 0;
+    mod[6][t] = on;
+    mod[t][6] = on;
+  }
+  var centers = QR_ALIGN[version - 1];
+  for (var a = 0; a < centers.length; a++) {
+    for (var b = 0; b < centers.length; b++) {
+      var r = centers[a];
+      var c = centers[b];
+      var nearFinder =
+        (r <= 8 && c <= 8) || (r <= 8 && c >= size - 9) || (r >= size - 9 && c <= 8);
+      if (nearFinder) continue;
+      for (var i2 = -2; i2 <= 2; i2++) {
+        for (var j2 = -2; j2 <= 2; j2++) {
+          var ring = Math.max(Math.abs(i2), Math.abs(j2));
+          mod[r + i2][c + j2] = ring !== 1;
+        }
+      }
+    }
+  }
+  mod[size - 8][8] = true;
+  if (version >= 7) {
+    var vb = qrVersionBits(version);
+    for (var k = 0; k < 18; k++) {
+      var bit = ((vb >> k) & 1) === 1;
+      mod[Math.floor(k / 3)][size - 11 + (k % 3)] = bit;
+      mod[size - 11 + (k % 3)][Math.floor(k / 3)] = bit;
+    }
+  }
+}
+
+function qrDrawFormat(mod, size, mask) {
+  var bits = qrFormatBits(mask);
+  function bit(i) {
+    return ((bits >> i) & 1) === 1;
+  }
+  for (var i = 0; i < 6; i++) mod[8][i] = bit(i);
+  mod[8][7] = bit(6);
+  mod[8][8] = bit(7);
+  mod[7][8] = bit(8);
+  for (var j = 9; j < 15; j++) mod[14 - j][8] = bit(j);
+  for (var k = 0; k < 7; k++) mod[size - 1 - k][8] = bit(k);
+  for (var m = 7; m < 15; m++) mod[8][size - 15 + m] = bit(m);
+}
+
+function qrPenalty(mod, size) {
+  var score = 0;
+  var dark = 0;
+  for (var i = 0; i < size; i++) {
+    for (var j = 0; j < size; j++) if (mod[i][j]) dark++;
+  }
+  function line(get) {
+    var run = 1;
+    var total = 0;
+    var seq = [];
+    for (var n = 0; n < size; n++) seq.push(get(n) ? 1 : 0);
+    for (var k = 1; k < size; k++) {
+      if (seq[k] === seq[k - 1]) {
+        run++;
+      } else {
+        if (run >= 5) total += 3 + (run - 5);
+        run = 1;
+      }
+    }
+    if (run >= 5) total += 3 + (run - 5);
+    var text = seq.join('');
+    var pat1 = '10111010000';
+    var pat2 = '00001011101';
+    var from = 0;
+    while (true) {
+      var hit = text.indexOf(pat1, from);
+      if (hit < 0) break;
+      total += 40;
+      from = hit + 1;
+    }
+    from = 0;
+    while (true) {
+      var hit2 = text.indexOf(pat2, from);
+      if (hit2 < 0) break;
+      total += 40;
+      from = hit2 + 1;
+    }
+    return total;
+  }
+  for (var r = 0; r < size; r++) {
+    score += line(function (n) {
+      return mod[r][n];
+    });
+  }
+  for (var c = 0; c < size; c++) {
+    score += line(function (n) {
+      return mod[n][c];
+    });
+  }
+  for (var y = 0; y < size - 1; y++) {
+    for (var x = 0; x < size - 1; x++) {
+      var v = mod[y][x];
+      if (v === mod[y][x + 1] && v === mod[y + 1][x] && v === mod[y + 1][x + 1]) score += 3;
+    }
+  }
+  var ratio = (dark * 100) / (size * size);
+  score += Math.floor(Math.abs(ratio - 50) / 5) * 10;
+  return score;
+}
+
+function qrBuild(version, codewords, mask) {
+  var size = version * 4 + 17;
+  var res = qrReserved(version);
+  var mod = qrGrid(size, false);
+  qrDrawFunctions(mod, version);
+
+  var bits = [];
+  for (var c = 0; c < codewords.length; c++) {
+    for (var b = 7; b >= 0; b--) bits.push((codewords[c] >> b) & 1);
+  }
+
+  var idx = 0;
+  var up = true;
+  for (var right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (var step = 0; step < size; step++) {
+      var row = up ? size - 1 - step : step;
+      for (var k = 0; k < 2; k++) {
+        var col = right - k;
+        if (res[row][col]) continue;
+        var bit = idx < bits.length ? bits[idx] === 1 : false;
+        idx++;
+        mod[row][col] = qrMaskBit(mask, row, col) ? !bit : bit;
+      }
+    }
+    up = !up;
+  }
+  qrDrawFormat(mod, size, mask);
+  return { size: size, modules: mod, reserved: res };
+}
+
+function qrMatrix(text) {
+  var bytes = qrUtf8Bytes(text);
+  var version = qrPickVersion(bytes.length);
+  if (!version) return null;
+  var codewords = qrCodewords(bytes, version);
+  var best = null;
+  for (var mask = 0; mask < 8; mask++) {
+    var built = qrBuild(version, codewords, mask);
+    var score = qrPenalty(built.modules, built.size);
+    if (!best || score < best.score) {
+      best = { score: score, mask: mask, size: built.size, modules: built.modules };
+    }
+  }
+  return { size: best.size, modules: best.modules, version: version, mask: best.mask };
+}
+
 /* ------------------------------------------------------------ api client -- */
 
 async function api(path, options = {}) {
@@ -1379,6 +1889,42 @@ const CSS_OWNER = `
 }
 `;
 
+const CSS_MEDIA = `
+/* ---------------------------------------------------------- photo upload -- */
+.up{display:flex; gap:14px; align-items:flex-start}
+.up-thumb{position:relative; width:84px; height:84px; flex:none; border-radius:18px; overflow:hidden; display:grid; place-items:center; background:linear-gradient(135deg,#f1f5f9,#e2e8f0); border:1px dashed var(--border); color:var(--light); cursor:pointer; transition:border-color .25s var(--ease), transform .25s var(--ease), box-shadow .25s var(--ease)}
+.up-thumb:hover{border-color:var(--pr); color:var(--pr); transform:translateY(-2px); box-shadow:var(--sh2)}
+.up-thumb:focus-visible{outline:3px solid rgba(14,165,233,.45); outline-offset:2px}
+.up-veil{position:absolute; inset:0; display:grid; place-items:center; background:rgba(255,255,255,.78)}
+.up-body{flex:1; min-width:0; display:flex; flex-direction:column; gap:8px}
+.up-actions{display:flex; flex-wrap:wrap; gap:8px}
+.up-ok{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--gr)}
+.up-err{display:inline-flex; align-items:flex-start; gap:6px; font-size:12px; font-weight:600; color:var(--red)}
+/* every avatar image fills its frame without distorting */
+.cc-av img,.bp-av img,.up-thumb img,.qrc-av img{width:100%; height:100%; object-fit:cover; display:block}
+
+/* --------------------------------------------------------- QR share card -- */
+.qrc-wrap{display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start}
+.qrc{width:300px; flex:none; border-radius:24px; overflow:hidden; background:#fff; border:1px solid var(--border); box-shadow:var(--sh3); transition:transform .3s var(--ease), box-shadow .3s var(--ease)}
+.qrc:hover{transform:translateY(-4px); box-shadow:var(--sh4)}
+.qrc-top{padding:16px 18px; display:flex; gap:12px; align-items:center; background:var(--grad); color:#fff}
+.qrc-av{width:52px; height:52px; flex:none; border-radius:16px; overflow:hidden; display:grid; place-items:center; background:rgba(255,255,255,.2); border:2px solid rgba(255,255,255,.5); color:#fff; font-family:'Sora',sans-serif; font-weight:800; font-size:16px}
+.qrc-id{min-width:0}
+.qrc-id b{display:block; font-family:'Sora',sans-serif; font-size:15px; font-weight:700; line-height:1.25; overflow-wrap:anywhere}
+.qrc-id span{display:block; margin-top:2px; font-size:11.5px; opacity:.92; overflow-wrap:anywhere}
+.qrc-code{padding:18px 18px 10px; display:grid; place-items:center}
+.qrc-code svg{width:100%; height:auto; display:block}
+.qrc-foot{padding:0 18px 18px; text-align:center}
+.qrc-url{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; line-height:1.55; color:var(--muted); overflow-wrap:anywhere}
+.qrc-brand{display:block; margin-top:9px; font-size:10.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--pr)}
+.qrc-side{flex:1; min-width:230px; display:flex; flex-direction:column; gap:10px; align-items:flex-start}
+.qrc-hint{font-size:12.5px; line-height:1.65; color:var(--muted)}
+@media (max-width:560px){
+  .qrc{width:100%}
+  .qrc-side{min-width:0; width:100%}
+}
+`;
+
 const CSS_RESP = `
 /* long emails, addresses and booking ids must wrap, never widen the page */
 .kv dd,.tk-mini b,.tk-mini small,.who b,.contact span,.lq-cap,.adm-clinic{overflow-wrap:anywhere; word-break:break-word}
@@ -1531,7 +2077,7 @@ function injectStyles() {
   if (existing) existing.remove();
   const tag = document.createElement('style');
   tag.id = 'mcf-styles';
-  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_RESP;
+  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_MEDIA + CSS_RESP;
   document.head.appendChild(tag);
   stylesInjected = true;
 }
@@ -2458,18 +3004,19 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
         </div>
         <div className="field">
           <label>
-            Email Address {walkIn ? <span className="hint">(optional)</span> : <span className="req">*</span>}
+            Email Address <span className="hint">(optional)</span>
           </label>
           <input
             className="input"
-            required={!walkIn}
             type="email"
             value={form.email}
             onChange={(e) => set('email', e.target.value)}
             placeholder="name@example.com"
             autoComplete="email"
           />
-          <span className="hint">{walkIn ? 'Add it to email the token receipt.' : 'Your OTP and token are sent here.'}</span>
+          <span className="hint">
+            {walkIn ? 'Add it to email the token receipt.' : 'Optional - add it to get the confirmation and cancellation emails.'}
+          </span>
         </div>
       </div>
 
@@ -2578,6 +3125,8 @@ function BookingPage({ clinicId, go, notify }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [resendIn, setResendIn] = useState(0);
+  // only becomes true if the API runs with REQUIRE_BOOKING_OTP=true
+  const [otpMode, setOtpMode] = useState(false);
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -2615,6 +3164,34 @@ function BookingPage({ clinicId, go, notify }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step]);
 
+  /* ONE-STEP BOOKING. Email OTP verification for APPOINTMENTS is switched off,
+     so this posts the form once and gets the token straight back. If the API is
+     running with REQUIRE_BOOKING_OTP=true it answers { otpRequired: true } and
+     the Verify OTP step is slotted back in - which is why it is kept below. */
+  const submitBooking = async (event) => {
+    if (event && event.preventDefault) event.preventDefault();
+    setBusy(true);
+    setError('');
+    const data = await api('/booking/create', { method: 'POST', body: { clinicId, form } });
+    setBusy(false);
+    if (!data.success) {
+      setError(data.message);
+      return;
+    }
+    if (data.otpRequired) {
+      setOtpMode(true);
+      setOtp('');
+      setStep(2);
+      setResendIn(60);
+      notify(data.message || 'OTP sent to your email.', 'ok');
+      return;
+    }
+    setResult(data.appointment);
+    setStep(3);
+    notify('Appointment confirmed. Token #' + data.appointment.bookingNumber + '.', 'ok');
+  };
+
+  /* Kept for the Resend code button, and for REQUIRE_BOOKING_OTP=true. */
   const sendOtp = async (event) => {
     if (event && event.preventDefault) event.preventDefault();
     setBusy(true);
@@ -2651,6 +3228,7 @@ function BookingPage({ clinicId, go, notify }) {
     setOtp('');
     setError('');
     setForm({ ...EMPTY_FORM, date: dates.length ? dates[0].value : todayISO() });
+    setOtpMode(false);
     setStep(1);
   };
 
@@ -2681,7 +3259,11 @@ function BookingPage({ clinicId, go, notify }) {
 
   const queue = clinic.todayQueue || { booked: 0, visited: 0, waiting: 0, nextToken: null };
   const firstName = String((result && result.name) || '').split(' ')[0];
-  const stepNotes = ['Patient details and date', 'Code sent to your email', 'Token number issued'];
+  const stepLabels = otpMode ? STEPS : ['Details', 'Confirmed'];
+  const stepFlow = otpMode ? [1, 2, 3] : [1, 3];
+  const stepNotes = otpMode
+    ? ['Patient details and date', 'Code sent to your email', 'Token number issued']
+    : ['Patient details and date', 'Token number issued'];
 
   return (
     <div className="bp container pg">
@@ -2728,17 +3310,17 @@ function BookingPage({ clinicId, go, notify }) {
             </span>
             <h2>Reserve your place in today's queue.</h2>
             <p className="lead">
-              Book for today or any of the next 5 days. Your token number is issued the moment your email is verified.
+              Book for today or any of the next 5 days. Your token number is issued as soon as you submit the form.
             </p>
           </div>
 
           <div className="steps">
-            {STEPS.map((label, index) => {
-              const num = index + 1;
+            {stepLabels.map((label, index) => {
+              const num = stepFlow[index];
               const state = step > num ? ' done' : step === num ? ' on' : '';
               return (
                 <div className={'step-row' + state} key={label}>
-                  <div className="step-dot">{step > num ? <Icon name="check" size={15} /> : num}</div>
+                  <div className="step-dot">{step > num ? <Icon name="check" size={15} /> : index + 1}</div>
                   <div className="step-txt">
                     <b>{label}</b>
                     <span>{stepNotes[index]}</span>
@@ -2751,7 +3333,7 @@ function BookingPage({ clinicId, go, notify }) {
           <div className="trust">
             <div>
               <Icon name="shield" size={16} />
-              <span>Every booking is verified with a one-time code sent to your email.</span>
+              <span>No account and no OTP - your token is issued the moment you submit the form.</span>
             </div>
             <div>
               <Icon name="ticket" size={16} />
@@ -2772,9 +3354,9 @@ function BookingPage({ clinicId, go, notify }) {
 
         <section>
           {step === 1 ? (
-            <form className="form-card" onSubmit={sendOtp} noValidate>
+            <form className="form-card" onSubmit={submitBooking} noValidate>
               <span className="eyebrow">
-                <Icon name="user" size={13} /> Step 1 of 3
+                <Icon name="user" size={13} /> Step 1 of {stepLabels.length}
               </span>
               <h2>Patient details</h2>
               <p className="lead">Enter the details exactly as they should appear on the clinic's queue list.</p>
@@ -2793,11 +3375,11 @@ function BookingPage({ clinicId, go, notify }) {
                 <button className="btn btn-primary btn-lg btn-block" disabled={busy}>
                   {busy ? (
                     <>
-                      <Spinner /> Sending code...
+                      <Spinner /> Booking your token...
                     </>
                   ) : (
                     <>
-                      Send verification code <Icon name="right" size={17} />
+                      Confirm appointment <Icon name="right" size={17} />
                     </>
                   )}
                 </button>
@@ -2872,9 +3454,15 @@ function BookingPage({ clinicId, go, notify }) {
               <div className="done-ring">
                 <Icon name="check" size={40} />
               </div>
-              <span className="eyebrow">Step 3 of 3 - confirmed</span>
+              <span className="eyebrow">
+                Step {stepLabels.length} of {stepLabels.length} - confirmed
+              </span>
               <h2>You are all set{firstName ? ', ' + firstName : ''}.</h2>
-              <p className="lead">A confirmation with your token number has been emailed to {result.email}.</p>
+              <p className="lead">
+                {result.email
+                  ? 'A confirmation with your token number has been emailed to ' + result.email + '.'
+                  : 'Save the token number below - you can follow your place any time from Token queue tracking.'}
+              </p>
 
               <div className="token-box">
                 <small>Your queue token</small>
@@ -3033,6 +3621,117 @@ function AuthShell({ children, go, mode }) {
   );
 }
 
+/* Renders as a bare label + control so it drops straight into an existing
+   .field wrapper wherever the old "Photo URL" input used to sit. */
+function ImagePicker({ value, onChange, label = 'Clinic / doctor photo', hint = '' }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+
+  const pick = () => {
+    if (!busy && inputRef.current) inputRef.current.click();
+  };
+
+  const handleFile = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (event.target) event.target.value = ''; // lets the same file be re-picked
+    if (!file) return;
+
+    setError('');
+    setNote('');
+    if (!/^image\//.test(file.type)) {
+      setError('Please choose an image file (JPG, PNG, WEBP or GIF).');
+      return;
+    }
+
+    setBusy(true);
+    let payload;
+    try {
+      payload = await fitImageFile(file);
+    } catch (problem) {
+      setBusy(false);
+      setError(problem.message || 'That image could not be processed.');
+      return;
+    }
+    if (payload.size > MAX_UPLOAD_BYTES) {
+      setBusy(false);
+      setError('Even after resizing that image is ' + Math.round(payload.size / 1024) + ' KB. Please choose a smaller one.');
+      return;
+    }
+
+    const data = await uploadImage(payload);
+    setBusy(false);
+    if (!data.success) {
+      setError(data.message);
+      return;
+    }
+    onChange(data.url || '', data.key || '');
+    setNote('Uploaded - ' + Math.round((data.bytes || payload.size) / 1024) + ' KB');
+  };
+
+  return (
+    <>
+      <label>{label}</label>
+      <div className="up">
+        <div
+          className="up-thumb"
+          role="button"
+          tabIndex={0}
+          title="Choose a photo"
+          onClick={pick}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              pick();
+            }
+          }}
+        >
+          {value ? <img src={value} alt="" /> : <Icon name="building" size={22} />}
+          {busy ? (
+            <div className="up-veil">
+              <Spinner />
+            </div>
+          ) : null}
+        </div>
+        <div className="up-body">
+          <div className="up-actions">
+            <button type="button" className="btn btn-soft btn-sm" onClick={pick} disabled={busy}>
+              <Icon name={value ? 'refresh' : 'plus'} size={14} /> {value ? 'Replace photo' : 'Upload photo'}
+            </button>
+            {value ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={busy}
+                onClick={() => {
+                  onChange('', '');
+                  setNote('');
+                  setError('');
+                }}
+              >
+                <Icon name="close" size={14} /> Remove
+              </button>
+            ) : null}
+          </div>
+          <span className="hint">{hint || 'JPG, PNG, WEBP or GIF. Big photos are resized automatically and stored under 900 KB.'}</span>
+          {note ? (
+            <span className="up-ok">
+              <Icon name="check" size={12} /> {note}
+            </span>
+          ) : null}
+          {error ? (
+            <span className="up-err">
+              <Icon name="alert" size={12} /> {error}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
+    </>
+  );
+}
+
 function RegisterPage({ go, notify, onSession }) {
   const [form, setForm] = useState({
     clinicName: '',
@@ -3042,6 +3741,7 @@ function RegisterPage({ go, notify, onSession }) {
     city: '',
     phone: '',
     photo: '',
+    photoKey: '',
     timings: '',
     about: '',
     adminUserId: '',
@@ -3243,15 +3943,20 @@ function RegisterPage({ go, notify, onSession }) {
             </div>
           </div>
 
-          <div className="grid2">
-            <div className="field">
-              <label>Opening hours</label>
-              <input className="input" value={form.timings} onChange={(e) => set('timings', e.target.value)} placeholder="Mon-Sat, 9 AM - 6 PM" />
-            </div>
-            <div className="field">
-              <label>Photo URL</label>
-              <input className="input" value={form.photo} onChange={(e) => set('photo', e.target.value)} placeholder="https://..." />
-            </div>
+          <div className="field">
+            <label>Opening hours</label>
+            <input className="input" value={form.timings} onChange={(e) => set('timings', e.target.value)} placeholder="Mon-Sat, 9 AM - 6 PM" />
+          </div>
+
+          <div className="field">
+            <ImagePicker
+              value={form.photo}
+              hint="Optional. Appears on your public listing, your booking page and your QR card."
+              onChange={(url, key) => {
+                set('photo', url);
+                set('photoKey', key);
+              }}
+            />
           </div>
 
           <div className="divider">Admin login</div>
@@ -5447,6 +6152,345 @@ function WalkInModal({ close, notify, onAdded, onExpired }) {
 
 /* ------------------------------------------------------------ settings -- */
 
+/* ============================================================================
+ * QR SHARE CARD - the public booking link as a scannable, downloadable card.
+ * The symbol is produced by the encoder above, in the browser, so it needs no
+ * QR web service, keeps working while the API is cold-starting, and never
+ * leaks clinic URLs to a third party. Error correction is level H (30%), which
+ * is exactly what makes the name badge in the middle safe to draw over.
+ * ========================================================================== */
+
+const QR_QUIET = 4;
+const QR_STOPS = ['#0f766e', '#0d9488', '#0ea5e9'];
+// one rounded module, as a relative SVG path segment
+const QR_DOT = 'h.44a.28.28 0 0 1 .28.28v.44a.28.28 0 0 1-.28.28h-.44a.28.28 0 0 1-.28-.28v-.44a.28.28 0 0 1 .28-.28z';
+
+function qrPathFor(code) {
+  let d = '';
+  for (let r = 0; r < code.size; r++) {
+    for (let c = 0; c < code.size; c++) {
+      if (code.modules[r][c]) d += 'M' + (c + QR_QUIET + 0.28) + ' ' + (r + QR_QUIET) + QR_DOT;
+    }
+  }
+  return d;
+}
+
+function roundedPath(ctx, x, y, w, h, r) {
+  const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.moveTo(x + rad, y);
+  ctx.lineTo(x + w - rad, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+  ctx.lineTo(x + w, y + h - rad);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+  ctx.lineTo(x + rad, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+  ctx.lineTo(x, y + rad);
+  ctx.quadraticCurveTo(x, y, x + rad, y);
+  ctx.closePath();
+}
+
+/* crossOrigin is what lets the photo be drawn without tainting the canvas -
+   a tainted canvas would make the PNG export throw. On any failure we resolve
+   null and the card falls back to initials instead of breaking the download. */
+function loadCorsImage(url) {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function clipText(ctx, text, maxWidth) {
+  let value = String(text || '');
+  if (!value || ctx.measureText(value).width <= maxWidth) return value;
+  while (value.length > 1 && ctx.measureText(value + '...').width > maxWidth) value = value.slice(0, -1);
+  return value + '...';
+}
+
+function chunkText(text, size) {
+  const out = [];
+  let rest = String(text || '');
+  while (rest.length > size) {
+    out.push(rest.slice(0, size));
+    rest = rest.slice(size);
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+function QrShareCard({ clinic, link, notify }) {
+  const [code, setCode] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setCode(qrMatrix(link));
+  }, [link]);
+
+  const person = String(clinic.doctorName || clinic.clinicName || '').trim();
+  const badgeText = person.length > 17 ? person.slice(0, 16) + '.' : person;
+  const total = code ? code.size + QR_QUIET * 2 : 0;
+  const gradId = 'qrg-' + String(clinic.clinicId || 'clinic').replace(/[^A-Za-z0-9_-]/g, '');
+  const badgeW = total * 0.36;
+  const badgeH = total * 0.115;
+
+  const download = async () => {
+    if (!code) return;
+    setBusy(true);
+    try {
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    } catch (_error) {
+      /* fonts are optional, carry on with the fallbacks */
+    }
+    const photo = await loadCorsImage(clinic.photo || '');
+
+    try {
+      const S = 3; // print-friendly pixel density
+      const W = 340;
+      const HEAD = 96;
+      const PAD = 20;
+      const QS = W - PAD * 2;
+      const urlLines = chunkText(link, 44);
+      const H = HEAD + 16 + QS + 18 + urlLines.length * 12 + 22 + PAD;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = W * S;
+      canvas.height = H * S;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(S, S);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      roundedPath(ctx, 0, 0, W, H, 24);
+      ctx.fill();
+
+      ctx.save();
+      ctx.beginPath();
+      roundedPath(ctx, 0, 0, W, H, 24);
+      ctx.clip();
+      const head = ctx.createLinearGradient(0, 0, W, HEAD);
+      head.addColorStop(0, '#0f766e');
+      head.addColorStop(1, '#0ea5e9');
+      ctx.fillStyle = head;
+      ctx.fillRect(0, 0, W, HEAD);
+      ctx.restore();
+
+      const AV = 56;
+      const avY = (HEAD - AV) / 2;
+      ctx.save();
+      ctx.beginPath();
+      roundedPath(ctx, PAD, avY, AV, AV, 17);
+      ctx.clip();
+      if (photo && photo.width && photo.height) {
+        const ratio = Math.max(AV / photo.width, AV / photo.height);
+        const pw = photo.width * ratio;
+        const ph = photo.height * ratio;
+        ctx.drawImage(photo, PAD + (AV - pw) / 2, avY + (AV - ph) / 2, pw, ph);
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,.22)';
+        ctx.fillRect(PAD, avY, AV, AV);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 18px Sora, Segoe UI, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(initials(clinic.clinicName), PAD + AV / 2, HEAD / 2);
+      }
+      ctx.restore();
+
+      const tx = PAD + AV + 14;
+      const room = W - tx - PAD;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 15px Sora, Segoe UI, sans-serif';
+      ctx.fillText(clipText(ctx, clinic.clinicName, room), tx, 42);
+      ctx.font = '600 11.5px Inter, Segoe UI, sans-serif';
+      ctx.globalAlpha = 0.95;
+      ctx.fillText(clipText(ctx, clinic.doctorName, room), tx, 60);
+      ctx.globalAlpha = 0.85;
+      ctx.fillText(clipText(ctx, clinic.specialization, room), tx, 76);
+      ctx.globalAlpha = 1;
+
+      const qy = HEAD + 16;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(PAD, qy, QS, QS);
+      const unit = QS / total;
+      const grad = ctx.createLinearGradient(PAD, qy, PAD + QS, qy + QS);
+      grad.addColorStop(0, QR_STOPS[0]);
+      grad.addColorStop(0.5, QR_STOPS[1]);
+      grad.addColorStop(1, QR_STOPS[2]);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      for (let r = 0; r < code.size; r++) {
+        for (let c = 0; c < code.size; c++) {
+          if (!code.modules[r][c]) continue;
+          roundedPath(ctx, PAD + (c + QR_QUIET) * unit, qy + (r + QR_QUIET) * unit, unit, unit, unit * 0.28);
+        }
+      }
+      ctx.fill();
+
+      const bw = QS * 0.36;
+      const bh = QS * 0.115;
+      const bx = PAD + (QS - bw) / 2;
+      const by = qy + (QS - bh) / 2;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      roundedPath(ctx, bx, by, bw, bh, bh * 0.34);
+      ctx.fill();
+      ctx.strokeStyle = '#0f766e';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      roundedPath(ctx, bx, by, bw, bh, bh * 0.34);
+      ctx.stroke();
+      ctx.fillStyle = '#0f766e';
+      ctx.font = '700 ' + Math.round(bh * 0.44) + 'px Sora, Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(clipText(ctx, badgeText, bw - 12), bx + bw / 2, by + bh / 2);
+
+      let ty = qy + QS + 18;
+      ctx.font = '10px ui-monospace, Menlo, monospace';
+      ctx.fillStyle = '#64748b';
+      urlLines.forEach((line) => {
+        ctx.fillText(line, W / 2, ty);
+        ty += 12;
+      });
+      ctx.font = '800 10.5px Inter, Segoe UI, sans-serif';
+      ctx.fillStyle = '#0f766e';
+      ctx.fillText('SCAN TO BOOK - MEDICARE FLOW', W / 2, ty + 12);
+
+      canvas.toBlob((blob) => {
+        setBusy(false);
+        if (!blob) {
+          notify('The QR card could not be generated in this browser.', 'err');
+          return;
+        }
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = href;
+        anchor.download = (clinic.clinicId || 'clinic') + '-booking-qr.png';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        setTimeout(() => URL.revokeObjectURL(href), 4000);
+        notify('QR card downloaded.', 'ok');
+      }, 'image/png');
+    } catch (error) {
+      setBusy(false);
+      notify('The QR card could not be exported. ' + (error.message || ''), 'err');
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Booking QR card</h3>
+          <p className="small muted">Print it for the reception desk or share the image. Scanning opens your booking page.</p>
+        </div>
+      </div>
+      <div className="panel-body">
+        <div className="qrc-wrap">
+          <div className="qrc">
+            <div className="qrc-top">
+              <div className="qrc-av">{clinic.photo ? <img src={clinic.photo} alt="" /> : initials(clinic.clinicName)}</div>
+              <div className="qrc-id">
+                <b>{clinic.clinicName}</b>
+                <span>
+                  {clinic.doctorName}
+                  {clinic.specialization ? ' - ' + clinic.specialization : ''}
+                </span>
+              </div>
+            </div>
+            <div className="qrc-code">
+              {code ? (
+                <svg viewBox={'0 0 ' + total + ' ' + total} role="img" aria-label="QR code for the booking page">
+                  <defs>
+                    <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stopColor={QR_STOPS[0]} />
+                      <stop offset="50%" stopColor={QR_STOPS[1]} />
+                      <stop offset="100%" stopColor={QR_STOPS[2]} />
+                    </linearGradient>
+                  </defs>
+                  <rect width={total} height={total} fill="#ffffff" />
+                  <path d={qrPathFor(code)} fill={'url(#' + gradId + ')'} />
+                  <rect
+                    x={(total - badgeW) / 2}
+                    y={(total - badgeH) / 2}
+                    width={badgeW}
+                    height={badgeH}
+                    rx={badgeH * 0.34}
+                    fill="#ffffff"
+                    stroke={QR_STOPS[0]}
+                    strokeWidth={total * 0.006}
+                  />
+                  <text
+                    x={total / 2}
+                    y={total / 2}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontFamily="Sora, Segoe UI, sans-serif"
+                    fontWeight="700"
+                    fontSize={badgeH * 0.44}
+                    fill={QR_STOPS[0]}
+                  >
+                    {badgeText}
+                  </text>
+                </svg>
+              ) : (
+                <Loading label="Building QR code" />
+              )}
+            </div>
+            <div className="qrc-foot">
+              <span className="qrc-url">{link}</span>
+              <span className="qrc-brand">Scan to book</span>
+            </div>
+          </div>
+
+          <div className="qrc-side">
+            <p className="qrc-hint">
+              The card downloads as a high-resolution PNG with your photo, name and speciality already on it, so it is ready to print or
+              post as-is.
+            </p>
+            <button className="btn btn-primary btn-sm" onClick={download} disabled={busy || !code}>
+              {busy ? (
+                <>
+                  <Spinner /> Preparing card...
+                </>
+              ) : (
+                <>
+                  <Icon name="ticket" size={15} /> Download QR card
+                </>
+              )}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                if (navigator.clipboard) {
+                  navigator.clipboard.writeText(link);
+                  notify('Booking link copied.', 'ok');
+                } else {
+                  notify('Copy is not available in this browser.', 'err');
+                }
+              }}
+            >
+              <Icon name="list" size={15} /> Copy the link
+            </button>
+            <p className="qrc-hint">
+              Generated on this device with 30% error correction, which is why the name badge in the middle does not stop it scanning.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
   const [profile, setProfile] = useState({
     clinicName: clinic.clinicName || '',
@@ -5456,6 +6500,7 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
     city: clinic.city || '',
     phone: clinic.phone || '',
     photo: clinic.photo || '',
+    photoKey: clinic.photoKey || '',
     timings: clinic.timings || '',
     about: clinic.about || '',
     adminEmail: clinic.adminEmail || '',
@@ -5564,8 +6609,13 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
               <input className="input" value={profile.timings} onChange={(e) => set('timings', e.target.value)} placeholder="Mon-Sat, 9 AM - 6 PM" />
             </div>
             <div className="field">
-              <label>Photo URL</label>
-              <input className="input" value={profile.photo} onChange={(e) => set('photo', e.target.value)} />
+              <ImagePicker
+                value={profile.photo}
+                onChange={(url, key) => {
+                  set('photo', url);
+                  set('photoKey', key);
+                }}
+              />
             </div>
           </div>
           <div className="field">
@@ -5634,6 +6684,8 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
             </dl>
           </div>
         </div>
+
+        <QrShareCard clinic={clinic} link={bookingLink} notify={notify} />
 
         <form className="panel" onSubmit={savePassword} noValidate>
           <div className="panel-head">
@@ -5872,6 +6924,7 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
     phone: editing ? clinic.phone || '' : '',
     timings: editing ? clinic.timings || '' : '',
     photo: editing ? clinic.photo || '' : '',
+    photoKey: editing ? clinic.photoKey || '' : '',
     about: editing ? clinic.about || '' : '',
     adminUserId: editing ? clinic.adminUserId || '' : '',
     adminEmail: editing ? clinic.adminEmail || '' : '',
@@ -5990,8 +7043,10 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
         </div>
 
         <div className="field">
-          <label>Photo URL</label>
-          <input className="input" value={form.photo} onChange={set('photo')} placeholder="https://..." />
+          <ImagePicker
+            value={form.photo}
+            onChange={(url, key) => setForm((prev) => Object.assign({}, prev, { photo: url, photoKey: key }))}
+          />
         </div>
 
         <div className="field">

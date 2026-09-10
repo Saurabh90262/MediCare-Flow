@@ -76,6 +76,26 @@ const TZ = process.env.TIMEZONE || 'Asia/Kolkata';
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '';
 const KEEPALIVE_MINUTES = Number(process.env.KEEPALIVE_MINUTES || 14);
 
+/* Cloudflare R2 image storage. R2 speaks the S3 API, so uploads are signed with
+   AWS Signature V4 using Node's built-in crypto module - no @aws-sdk packages,
+   no third-party upload service, nothing new in package.json. Leave these blank
+   and the app still boots; the photo picker simply reports storage is off. */
+// String(), not the str() helper - that const is declared far below this line.
+const R2_ACCOUNT_ID = String(process.env.R2_ACCOUNT_ID || '').trim();
+const R2_ACCESS_KEY_ID = String(process.env.R2_ACCESS_KEY_ID || '').trim();
+const R2_SECRET_ACCESS_KEY = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
+const R2_BUCKET_NAME = String(process.env.R2_BUCKET_NAME || '').trim();
+/* OPTIONAL. Point this at an R2 public bucket URL or custom domain and photos
+   are served from Cloudflare's edge. Leave it blank and they stream through
+   GET /api/images/:key instead, which needs zero R2 dashboard configuration. */
+const R2_PUBLIC_URL = String(process.env.R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+const MAX_IMAGE_BYTES = 900 * 1024; // 900 KB ceiling, enforced server-side too
+
+/* Appointment booking OTP is OFF: patients book in one step and email is
+   optional. The OTP routes are kept intact, not deleted - set
+   REQUIRE_BOOKING_OTP=true in .env to switch that step back on. */
+const REQUIRE_BOOKING_OTP = String(process.env.REQUIRE_BOOKING_OTP || 'false').trim().toLowerCase() === 'true';
+
 /* Master admin (the platform owner). Credentials live in the environment on
    purpose - there is no owner row in MongoDB, so no API call can ever create
    or escalate one. OWNER_EMAIL receives every new listing request. */
@@ -118,6 +138,9 @@ const clinicSchema = new mongoose.Schema(
     city: { type: String, default: '', trim: true },
     phone: { type: String, required: true, trim: true },
     photo: { type: String, default: '', trim: true },
+    /* R2 object name behind `photo`. Stored so replacing a photo or deleting a
+       clinic can also remove the old file instead of orphaning it in R2. */
+    photoKey: { type: String, default: '', trim: true },
     about: { type: String, default: '', trim: true },
     timings: { type: String, default: '', trim: true },
     adminUserId: { type: String, required: true, unique: true, trim: true, lowercase: true },
@@ -232,6 +255,26 @@ async function reconcileIndexes() {
 /* Clinics that existed BEFORE the approval workflow have no `status` field, so
    a bare schema default would silently delist every live clinic on first boot.
    Anything already in the database is treated as previously approved. */
+/* The pre-upload demo photos were plain external URLs with no R2 object behind
+   them. Clearing them once restores the initials avatar until a real photo is
+   uploaded. Naturally idempotent: afterwards no clinic matches, and every
+   uploaded photo has a photoKey so it is never touched. */
+async function migrateLegacyPhotos() {
+  try {
+    const result = await Clinic.updateMany(
+      {
+        photo: { $nin: ['', null] },
+        $or: [{ photoKey: { $exists: false } }, { photoKey: '' }, { photoKey: null }],
+      },
+      { $set: { photo: '', photoKey: '' } }
+    );
+    const changed = result.modifiedCount || result.nModified || 0;
+    if (changed) console.log('[OK] Photo migration: cleared ' + changed + ' demo photo URL(s).');
+  } catch (error) {
+    console.error('[warn] Photo migration skipped:', error.message);
+  }
+}
+
 async function migrateListingStatus() {
   try {
     const result = await Clinic.updateMany(
@@ -240,6 +283,7 @@ async function migrateListingStatus() {
     );
     const changed = result.modifiedCount || result.nModified || 0;
     if (changed) console.log('[OK] Listing migration: ' + changed + ' existing clinic(s) kept approved.');
+    await migrateLegacyPhotos();
   } catch (error) {
     console.error('[warn] Listing migration skipped:', error.message);
   }
@@ -280,6 +324,8 @@ const dbUp = () => mongoose.connection.readyState === 1;
 // Any /api route except /api/health needs a live database.
 app.use('/api', (req, res, next) => {
   if (req.originalUrl.startsWith('/api/health')) return next();
+  // Photos live in R2, not Mongo, so they stay visible if the database blips.
+  if (req.originalUrl.startsWith('/api/images/')) return next();
   if (dbUp()) return next();
   return res.status(503).json({
     success: false,
@@ -295,6 +341,11 @@ const esc = (value = '') =>
   String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
 
 const str = (value) => String(value === undefined || value === null ? '' : value).trim();
+
+/* One strict address test used everywhere. Requires an @, a dot in the domain
+   and a 2+ letter TLD, so "saurabhgmail" and "saurabh@gmail" are both rejected
+   while "saurabh123@gmail.com" passes. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/;
 
 function todayStr() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -410,6 +461,148 @@ function ownerClinic(clinic, counts) {
   });
 }
 
+/* ------------------------------------------------------- image storage (R2) -- */
+
+/* Cloudflare R2 is S3-compatible, so a signed PUT is the whole upload. Below is
+   AWS Signature V4 built on the crypto module that ships with Node. */
+
+const R2_HOST = R2_ACCOUNT_ID ? R2_ACCOUNT_ID + '.r2.cloudflarestorage.com' : '';
+const R2_REGION = 'auto';
+const EMPTY_SHA256 = crypto.createHash('sha256').update('').digest('hex');
+
+function r2Ready() {
+  return Boolean(R2_HOST && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+}
+
+function hmac256(key, value) {
+  return crypto.createHmac('sha256', key).update(value, 'utf8').digest();
+}
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function r2ObjectUrl(key) {
+  return 'https://' + R2_HOST + '/' + R2_BUCKET_NAME + '/' + encodeURIComponent(key);
+}
+
+/* Builds the Authorization header for exactly one R2 request. */
+function r2Sign(method, key, payloadHash, extraHeaders) {
+  const amzDate = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const stamp = amzDate.slice(0, 8);
+  const canonicalUri = '/' + R2_BUCKET_NAME + '/' + encodeURIComponent(key);
+
+  const raw = Object.assign(
+    { host: R2_HOST, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate },
+    extraHeaders || {}
+  );
+  const lower = {};
+  Object.keys(raw).forEach((name) => {
+    lower[name.toLowerCase()] = String(raw[name]).trim();
+  });
+  const names = Object.keys(lower).sort();
+  const canonicalHeaders = names.map((name) => name + ':' + lower[name] + '\n').join('');
+  const signedHeaders = names.join(';');
+
+  const canonicalRequest = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const scope = stamp + '/' + R2_REGION + '/s3/aws4_request';
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+
+  let signing = hmac256('AWS4' + R2_SECRET_ACCESS_KEY, stamp);
+  signing = hmac256(signing, R2_REGION);
+  signing = hmac256(signing, 's3');
+  signing = hmac256(signing, 'aws4_request');
+  const signature = crypto.createHmac('sha256', signing).update(stringToSign, 'utf8').digest('hex');
+
+  return Object.assign({}, raw, {
+    Authorization:
+      'AWS4-HMAC-SHA256 Credential=' +
+      R2_ACCESS_KEY_ID +
+      '/' +
+      scope +
+      ', SignedHeaders=' +
+      signedHeaders +
+      ', Signature=' +
+      signature,
+  });
+}
+
+async function r2Put(key, body, contentType) {
+  if (!r2Ready()) throw new Error('R2 image storage is not configured.');
+  const headers = r2Sign('PUT', key, sha256Hex(body), { 'content-type': contentType });
+  const response = await fetch(r2ObjectUrl(key), { method: 'PUT', headers, body });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error('R2 responded ' + response.status + ' ' + detail.slice(0, 180));
+  }
+  return key;
+}
+
+function r2Fetch(key) {
+  return fetch(r2ObjectUrl(key), { method: 'GET', headers: r2Sign('GET', key, EMPTY_SHA256, null) });
+}
+
+async function r2Delete(key) {
+  if (!r2Ready() || !key) return false;
+  try {
+    const response = await fetch(r2ObjectUrl(key), { method: 'DELETE', headers: r2Sign('DELETE', key, EMPTY_SHA256, null) });
+    return response.ok || response.status === 404;
+  } catch (error) {
+    console.error('[warn] R2 delete failed for ' + key + ':', error.message);
+    return false;
+  }
+}
+
+/* Content type comes from the bytes, never from the client's Content-Type. */
+const IMAGE_KINDS = [
+  { ext: 'jpg', mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { ext: 'png', mime: 'image/png', test: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { ext: 'gif', mime: 'image/gif', test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
+  {
+    ext: 'webp',
+    mime: 'image/webp',
+    test: (b) =>
+      b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50,
+  },
+];
+
+function sniffImage(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  for (const kind of IMAGE_KINDS) {
+    if (kind.test(buffer)) return kind;
+  }
+  return null;
+}
+
+function imageUrlFor(req, key) {
+  if (R2_PUBLIC_URL) return R2_PUBLIC_URL + '/' + key;
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.get('host') || 'localhost:' + PORT).split(',')[0].trim();
+  return proto + '://' + host + '/api/images/' + key;
+}
+
+/* The photo picker is reachable before a clinic exists (during registration),
+   so it cannot require a token. This keeps anonymous abuse bounded. */
+const uploadHits = new Map();
+const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
+
+function uploadAllowed(ip) {
+  const now = Date.now();
+  const recent = (uploadHits.get(ip) || []).filter((at) => now - at < UPLOAD_WINDOW_MS);
+  if (recent.length >= 20) {
+    uploadHits.set(ip, recent);
+    return false;
+  }
+  recent.push(now);
+  uploadHits.set(ip, recent);
+  if (uploadHits.size > 400) {
+    for (const [addr, hits] of uploadHits) {
+      if (!hits.some((at) => now - at < UPLOAD_WINDOW_MS)) uploadHits.delete(addr);
+    }
+  }
+  return true;
+}
+
 /* ------------------------------------------------------------- validation -- */
 
 // Same rules as the original single-clinic validateAppointmentForm().
@@ -434,12 +627,19 @@ function validateAppointmentForm(data, options = {}) {
   if (!/^\d{10}$/.test(mobile)) return 'Mobile number must be exactly 10 digits.';
   if (!address || address.length < 4) return 'Please enter the patient address.';
 
+  /* Email is OPTIONAL for every booking source now that appointments no longer
+     need an OTP. Anything typed in must still be a real address. */
+  if (email && !EMAIL_RE.test(email)) {
+    return 'Please enter a valid email address like name@example.com, or leave it blank.';
+  }
+  if (options.requireEmail === true && !email) {
+    return 'An email address is required to receive the verification code.';
+  }
+
   if (walkIn) {
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Please enter a valid email address, or leave it blank.';
     if (date !== todayStr()) return 'Walk-in patients can only be added to today\'s queue.';
-  } else {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Please enter a valid email address (the OTP is sent there).';
-    if (!getAvailableDates().includes(date)) return 'Appointments can only be booked from today up to the next ' + BOOKING_DAYS + ' days.';
+  } else if (!getAvailableDates().includes(date)) {
+    return 'Appointments can only be booked from today up to the next ' + BOOKING_DAYS + ' days.';
   }
   return null;
 }
@@ -465,7 +665,7 @@ function validateRegistration(body) {
     if (!str(body[field])) return 'Please fill in every required field (' + field + ' is missing).';
   }
   if (!/^\d{10}$/.test(str(body.phone))) return 'Clinic phone number must be exactly 10 digits.';
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str(body.adminEmail))) return 'Please enter a valid admin email address.';
+  if (!EMAIL_RE.test(str(body.adminEmail))) return 'Please enter a valid admin email address.';
   if (!/^[a-zA-Z0-9_.]{4,24}$/.test(str(body.adminUserId))) return 'Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).';
   if (str(body.password).length < 6) return 'Password must be at least 6 characters long.';
   return null;
@@ -797,6 +997,11 @@ app.get('/api/health', (_req, res) =>
     lastKeepAliveAt: keepAlive.lastPingAt,
     masterAdmin: OWNER_PASSWORD ? 'configured (id: ' + OWNER_ID + ')' : 'set OWNER_ID + OWNER_PASSWORD in .env',
     approvalAlerts: OWNER_EMAIL ? 'to ' + maskEmail(OWNER_EMAIL) : 'set OWNER_EMAIL in .env',
+    imageStore: r2Ready()
+      ? 'Cloudflare R2 bucket ' + R2_BUCKET_NAME + (R2_PUBLIC_URL ? ' (public URL)' : ' (proxied via /api/images)')
+      : 'not configured - set the R2_* keys in .env',
+    maxImageKb: Math.round(MAX_IMAGE_BYTES / 1024),
+    bookingOtp: REQUIRE_BOOKING_OTP ? 'required' : 'off - one-step booking, email optional',
   })
 );
 
@@ -1326,6 +1531,7 @@ app.post(
       city: str(body.city),
       phone: str(body.phone),
       photo: str(body.photo),
+      photoKey: str(body.photoKey),
       about: str(body.about),
       timings: str(body.timings),
       adminUserId,
@@ -1505,7 +1711,99 @@ app.post(
   })
 );
 
-/* -------------------------------------------------------- booking (OTP) -- */
+/* ----------------------------------------------------------------- booking -- */
+
+/* ONE-STEP BOOKING - the current behaviour.
+   Email OTP verification for APPOINTMENTS is switched off: the patient submits
+   the form once and the token is issued immediately. Email is optional, and
+   when one is supplied the same confirmation and cancellation mails go out as
+   before. Clinic REGISTRATION still verifies its email by OTP - that is a
+   separate flow and is untouched.
+   The two OTP routes below are deliberately kept, not deleted: flip
+   REQUIRE_BOOKING_OTP=true in .env and this route hands back to them. */
+app.post(
+  '/api/booking/create',
+  ah(async (req, res) => {
+    const body = req.body || {};
+    const clinicId = str(body.clinicId);
+    const form = body.form || body.formData || {};
+
+    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
+    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+
+    const problem = validateAppointmentForm(form, { requireEmail: REQUIRE_BOOKING_OTP });
+    if (problem) return res.status(400).json({ success: false, message: problem });
+
+    const duplicate = await Appointment.findOne({
+      clinicId,
+      date: str(form.date),
+      mobile: str(form.mobile),
+      status: { $ne: 'cancelled' },
+    }).lean();
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        message: 'This mobile number already has appointment #' + duplicate.bookingNumber + ' on that date at this clinic.',
+      });
+    }
+
+    /* Flag on -> fall back to the two-step OTP flow. */
+    if (REQUIRE_BOOKING_OTP) {
+      const otp = sixDigits();
+      const pending = normalizeForm(form, 'online');
+      otpStore.set(otpKey(clinicId, form.email), { otp, form: pending, expires: Date.now() + OTP_TTL_MS, attempts: 0 });
+      const sent = await sendEmail({
+        to: str(form.email),
+        subject: 'OTP ' + otp + ' - verify your appointment at ' + clinic.clinicName,
+        html: otpEmail(clinic, pending, otp),
+      });
+      if (!sent) {
+        otpStore.delete(otpKey(clinicId, form.email));
+        return res.status(502).json({ success: false, message: 'We could not send the OTP email. Please try again.' });
+      }
+      return res.json({
+        success: true,
+        otpRequired: true,
+        message: 'A 6-digit OTP has been sent to ' + str(form.email) + '.',
+        expiresInMinutes: Math.round(OTP_TTL_MS / 60000),
+      });
+    }
+
+    const appointment = await createAppointment(clinicId, form, 'online');
+
+    // Optional email: only mail the patient when an address was actually given.
+    if (appointment.email) {
+      sendEmail({
+        to: appointment.email,
+        subject: 'Appointment confirmed - queue #' + appointment.bookingNumber + ' at ' + clinic.clinicName,
+        html: confirmEmail(clinic, appointment),
+      }).catch(() => {});
+    }
+
+    broadcastQueue(clinicId, appointment.date, 'new-booking').catch(() => {});
+
+    return res.status(201).json({
+      success: true,
+      otpRequired: false,
+      message: 'Appointment booked successfully.',
+      appointment: {
+        bookingId: appointment.bookingId,
+        bookingNumber: appointment.bookingNumber,
+        name: appointment.name,
+        date: appointment.date,
+        dateLabel: dateLabel(appointment.date),
+        longDate: longDate(appointment.date),
+        quota: appointment.quota,
+        status: appointment.status,
+        email: appointment.email,
+        mobile: appointment.mobile,
+      },
+      clinic: publicClinic(clinic),
+    });
+  })
+);
+
+/* ---- kept for REQUIRE_BOOKING_OTP=true, and for the Resend code button ---- */
 
 app.post(
   '/api/booking/send-otp',
@@ -1517,7 +1815,7 @@ app.post(
     const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
     if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
 
-    const problem = validateAppointmentForm(form);
+    const problem = validateAppointmentForm(form, { requireEmail: true });
     if (problem) return res.status(400).json({ success: false, message: problem });
 
     const duplicate = await Appointment.findOne({
@@ -1891,20 +2189,27 @@ app.put(
   ah(async (req, res) => {
     const body = req.body || {};
     const updates = {};
-    const editable = ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'phone', 'photo', 'about', 'timings', 'adminEmail'];
+    const editable = ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'phone', 'photo', 'photoKey', 'about', 'timings', 'adminEmail'];
     for (const field of editable) {
       if (body[field] !== undefined) updates[field] = str(body[field]);
     }
     if (updates.phone && !/^\d{10}$/.test(updates.phone)) {
       return res.status(400).json({ success: false, message: 'Clinic phone number must be exactly 10 digits.' });
     }
-    if (updates.adminEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(updates.adminEmail)) {
+    if (updates.adminEmail && !EMAIL_RE.test(updates.adminEmail)) {
       return res.status(400).json({ success: false, message: 'Please enter a valid admin email address.' });
     }
     if (updates.clinicName === '') return res.status(400).json({ success: false, message: 'Clinic name cannot be empty.' });
 
+    /* Remember the outgoing photo so a replaced file is removed from R2 instead
+       of sitting there forever as an orphan. */
+    const previous = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+    const oldPhotoKey = previous ? str(previous.photoKey) : '';
+
     const clinic = await Clinic.findOneAndUpdate({ clinicId: req.clinicId }, updates, { new: true, runValidators: true });
     if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+
+    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey)) r2Delete(oldPhotoKey).catch(() => {});
 
     return res.json({ success: true, message: 'Clinic profile updated.', clinic: adminClinic(clinic) });
   })
@@ -2198,6 +2503,7 @@ app.post(
       city: str(body.city),
       phone: str(body.phone),
       photo: str(body.photo),
+      photoKey: str(body.photoKey),
       about: str(body.about),
       timings: str(body.timings),
       adminUserId,
@@ -2227,7 +2533,9 @@ app.put(
     const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
     if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
 
-    for (const field of ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'photo', 'about', 'timings']) {
+    const oldPhotoKey = str(clinic.photoKey);
+
+    for (const field of ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'photo', 'photoKey', 'about', 'timings']) {
       if (body[field] !== undefined) clinic[field] = str(body[field]);
     }
 
@@ -2239,7 +2547,7 @@ app.put(
 
     if (body.adminEmail !== undefined) {
       const email = str(body.adminEmail).toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (!EMAIL_RE.test(email)) {
         return res.status(400).json({ success: false, message: 'Please enter a valid admin email address.' });
       }
       clinic.adminEmail = email;
@@ -2271,6 +2579,8 @@ app.put(
     }
 
     await clinic.save();
+    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey)) r2Delete(oldPhotoKey).catch(() => {});
+
     return res.json({ success: true, message: clinic.clinicName + ' was updated.', clinic: ownerClinic(clinic) });
   })
 );
@@ -2289,12 +2599,100 @@ app.delete(
     await Appointment.deleteMany({ clinicId });
     await QueueToken.deleteMany({ clinicId });
     await Clinic.deleteOne({ clinicId });
+    if (clinic.photoKey) r2Delete(clinic.photoKey).catch(() => {});
 
     return res.json({
       success: true,
       message: clinic.clinicName + ' and ' + appointments + ' appointment record(s) were deleted.',
       deleted: { clinicId, clinicName: clinic.clinicName, appointments },
     });
+  })
+);
+
+/* --------------------------------------------------------- image upload -- */
+
+/* The browser posts the raw (already downscaled) image bytes as the request
+   body, so there is no multipart parser and no base64 inflation. */
+app.post(
+  '/api/upload/clinic-photo',
+  express.raw({ type: ['image/*', 'application/octet-stream'], limit: MAX_IMAGE_BYTES + 4096 }),
+  ah(async (req, res) => {
+    if (!r2Ready()) {
+      return res.status(503).json({
+        success: false,
+        message:
+          'Image storage is not configured. Add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME to Backend/.env, then restart.',
+      });
+    }
+
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim() || 'unknown';
+    if (!uploadAllowed(ip)) {
+      return res.status(429).json({ success: false, message: 'Too many uploads from this device. Please wait a few minutes.' });
+    }
+
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) {
+      return res.status(400).json({ success: false, message: 'No image data was received. Please choose the file again.' });
+    }
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      return res.status(413).json({
+        success: false,
+        message: 'That image is ' + Math.round(buffer.length / 1024) + ' KB. The limit is ' + Math.round(MAX_IMAGE_BYTES / 1024) + ' KB.',
+      });
+    }
+
+    const kind = sniffImage(buffer);
+    if (!kind) {
+      return res.status(415).json({ success: false, message: 'Only JPG, PNG, WEBP or GIF images can be uploaded.' });
+    }
+
+    const key = 'clinic-' + Date.now().toString(36) + '-' + crypto.randomBytes(6).toString('hex') + '.' + kind.ext;
+    try {
+      await r2Put(key, buffer, kind.mime);
+    } catch (error) {
+      console.error('[ERROR] R2 upload failed:', error.message);
+      return res.status(502).json({ success: false, message: 'The image could not be stored in R2. ' + error.message });
+    }
+
+    console.log('[upload] ' + key + ' (' + Math.round(buffer.length / 1024) + ' KB)');
+    return res.status(201).json({
+      success: true,
+      message: 'Photo uploaded.',
+      key,
+      url: imageUrlFor(req, key),
+      bytes: buffer.length,
+      contentType: kind.mime,
+    });
+  })
+);
+
+/* Streams an R2 object through the API. This is what makes a PRIVATE bucket
+   work with no public access and no custom domain. Setting R2_PUBLIC_URL skips
+   this hop and serves straight from Cloudflare's edge instead. */
+app.get(
+  '/api/images/:key',
+  ah(async (req, res) => {
+    const key = str(req.params.key);
+    if (!/^[A-Za-z0-9._-]{6,120}$/.test(key)) return res.status(400).send('Bad image key');
+    if (!r2Ready()) return res.status(503).send('Image storage is not configured');
+
+    let upstream;
+    try {
+      upstream = await r2Fetch(key);
+    } catch (error) {
+      console.error('[warn] R2 read failed for ' + key + ':', error.message);
+      return res.status(502).send('Image unavailable');
+    }
+    if (!upstream.ok) return res.status(upstream.status === 404 ? 404 : 502).send('Image not found');
+
+    const body = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+    // Keys are random and never reused, so the object is safe to cache forever.
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    /* Explicit CORS so the QR card can draw this photo onto a canvas and still
+       export a PNG - a tainted canvas would make the download throw. */
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.end(body);
   })
 );
 
@@ -2455,6 +2853,13 @@ server.listen(PORT, () => {
   console.log('  Timezone    ' + TZ + '  (today = ' + todayStr() + ')');
   console.log('  Cleanup     appointments older than ' + CLEANUP_DAYS + ' days, daily at midnight');
   console.log('  Booking     today + next ' + BOOKING_DAYS + ' days');
+  console.log(
+    '  Images      ' +
+      (r2Ready()
+        ? 'Cloudflare R2 -> ' + R2_BUCKET_NAME + '  (max ' + Math.round(MAX_IMAGE_BYTES / 1024) + ' KB' + (R2_PUBLIC_URL ? ', public URL' : ', proxied') + ')'
+        : 'DISABLED - set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME in .env')
+  );
+  console.log('  BookingOTP  ' + (REQUIRE_BOOKING_OTP ? 'required (email mandatory)' : 'off - one step, email optional'));
   console.log(
     '  Owner      ' +
       (OWNER_PASSWORD
