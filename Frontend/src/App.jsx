@@ -219,9 +219,18 @@ async function uploadImage(blob) {
 /* ============================================================================
  * QR ENCODER - byte mode, error-correction level H (30% recovery).
  * Zero dependencies and zero network calls: a QR symbol is a pure function of
- * the text, so no third-party generator API is involved. Level H is chosen so
- * the clinic name badge can sit in the middle without breaking the scan.
- * Versions 1..20 are supported (up to 452 bytes), far more than a booking URL.
+ * the text, so no third-party generator API is involved. Nothing is ever drawn
+ * on top of the symbol; level H simply buys margin against camera/print noise.
+ * Versions 1..20 are supported (up to 382 bytes), far more than a booking URL.
+ *
+ * Layout is ISO/IEC 18004 conformant and independently cross-checked:
+ *  - the finder separators are forced light. A stray dark module used to leak
+ *    into all three of them, which also broke the alternation at both ends of
+ *    the horizontal and vertical timing lines, so real detectors could not
+ *    lock onto the finder patterns even though the symbol looked fine.
+ *  - the second format-info copy is 8 bits along row 8 at the top right and
+ *    7 bits down column 8 at the bottom left. Those two runs used to be
+ *    swapped (and split 7/8), so half the format information was garbage.
  * ========================================================================== */
 
 var QR_EXP = [];
@@ -489,9 +498,13 @@ function qrDrawFunctions(mod, version) {
         var rr = r + i;
         var cc = c + j;
         if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
-        var edge = i === 0 || i === 6 || j === 0 || j === 6;
-        var core = i >= 2 && i <= 4 && j >= 2 && j <= 4;
-        mod[rr][cc] = edge || core;
+        var inFinder = i >= 0 && i <= 6 && j >= 0 && j <= 6;
+        if (!inFinder) {
+          mod[rr][cc] = false; /* separator ring: MUST stay light */
+          continue;
+        }
+        var ring = Math.max(Math.abs(i - 3), Math.abs(j - 3));
+        mod[rr][cc] = ring !== 2;
       }
     }
   }
@@ -540,8 +553,9 @@ function qrDrawFormat(mod, size, mask) {
   mod[8][8] = bit(7);
   mod[7][8] = bit(8);
   for (var j = 9; j < 15; j++) mod[14 - j][8] = bit(j);
-  for (var k = 0; k < 7; k++) mod[size - 1 - k][8] = bit(k);
-  for (var m = 7; m < 15; m++) mod[8][size - 15 + m] = bit(m);
+  for (var k = 0; k < 8; k++) mod[8][size - 1 - k] = bit(k);
+  for (var m = 8; m < 15; m++) mod[size - 15 + m][8] = bit(m);
+  mod[size - 8][8] = true; /* the always-dark module */
 }
 
 function qrPenalty(mod, size) {
@@ -2454,6 +2468,118 @@ input,select,textarea,button{max-width:100%}
   .tk-ring{width:112px; height:112px; margin-bottom:12px}
 }
 
+/* -- 7. DEDICATED MOBILE ADMIN -------------------------------------------
+   Phones get their own panel rather than a scaled-down desktop dashboard:
+   a real bottom tab bar, two-up statistics, card-shaped appointment rows,
+   the primary queue action first, and dialogs that behave as bottom sheets. */
+@media (max-width:900px){
+  /* 7a. section nav becomes a thumb-reachable bottom tab bar */
+  .adm-tabs{
+    display:flex; position:fixed; inset:auto 0 0 0; z-index:100; margin:0;
+    padding:6px 5px calc(6px + env(safe-area-inset-bottom,0px));
+    gap:3px; overflow:visible; border:0; border-top:1px solid var(--border);
+    background:rgba(255,255,255,.97);
+    -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+    box-shadow:0 -8px 24px rgba(15,23,42,.09);
+  }
+  .adm-tabs button{
+    flex:1 1 0; min-width:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:3px;
+    padding:7px 3px 5px; min-height:54px; border:0; border-radius:15px;
+    background:none; color:var(--muted);
+    font-size:10.5px; font-weight:700; line-height:1.15; text-align:center;
+  }
+  .adm-tabs button span{display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .adm-tabs button.on{color:var(--pr); background:#eefcf9}
+  .adm-tabs button:active{transform:scale(.95)}
+  .adm-body{padding-bottom:calc(80px + env(safe-area-inset-bottom,0px))}
+  .toast-wrap{bottom:calc(78px + env(safe-area-inset-bottom,0px))}
+
+  /* 7b. the tip line is not the headline on a phone */
+  .adm-body > .hint-bar{order:1; margin-bottom:0}
+  .adm-body > .lst-banner{order:-2}
+
+  /* 7c. the primary queue action comes first and spans the width */
+  .panel-head .adm-top-actions{width:100%; display:grid; grid-template-columns:1fr; gap:8px}
+  .panel-head .adm-top-actions > .btn-primary{order:-1; min-height:50px; font-size:15.5px}
+  .panel-head .adm-top-actions .date-pick,
+  .panel-head .adm-top-actions .btn{width:100%; min-height:44px}
+
+  /* 7d. long clinic names, addresses and emails wrap instead of stretching */
+  .own-card-id b,.own-card-id span{white-space:normal; overflow:visible; word-break:break-word}
+  .tbl td .who b,.tbl td .contact,.own-meta span,.own-cell-sub{overflow-wrap:anywhere}
+}
+@media (max-width:600px){
+  /* 7e. compact two-up statistics of equal height */
+  .stat-grid{grid-template-columns:1fr 1fr; gap:11px}
+  .stat-grid > *{min-width:0}
+  .stat{height:100%; padding:14px 13px; gap:9px; border-radius:18px}
+  .stat .stat-ico{width:34px; height:34px; border-radius:11px}
+  .stat b{font-size:clamp(21px,6.2vw,26px)}
+  .an-grid > *{min-width:0}
+  .an-tile{height:100%}
+
+  /* 7f. next patient */
+  .next-card{padding:18px 16px; border-radius:20px}
+  .next-card b{font-size:clamp(40px,13vw,52px)}
+
+  /* 7g. search first, filters two-up, action full width */
+  .filters{grid-template-columns:1fr 1fr; gap:9px}
+  .filters .input-icon{grid-column:1/-1}
+  .filters .input-icon input{min-height:46px; font-size:15px}
+  .filters .select{width:100%; min-width:0; min-height:44px}
+  .filters > .btn{grid-column:1/-1; width:100%; min-height:44px}
+
+  /* 7h. appointments read as cards with a tidy action grid */
+  .tbl tbody tr{padding:13px 14px; border-radius:18px; box-shadow:var(--sh1)}
+  .tbl td{padding:6px 0; font-size:13px; gap:10px; align-items:flex-start}
+  .tbl td::before{font-size:10px; padding-top:3px}
+  .tbl td.tok{padding-bottom:11px; margin-bottom:3px; border-bottom:1px dashed var(--border2)}
+  .tbl td:last-child{padding-bottom:0}
+  .row-actions{width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:11px; border-top:1px solid var(--border2)}
+  .row-actions .btn{width:100%; min-height:44px; margin:0}
+  .row-actions .btn-ghost{grid-column:1/-1}
+
+  /* 7i. master admin approve / reject controls */
+  .own-actions{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:13px}
+  .own-actions .btn{width:100%; min-height:44px; margin:0}
+  .own-actions .btn-ghost{grid-column:1/-1}
+
+  /* 7j. key-value dialogs read top-down */
+  .kv{grid-template-columns:1fr; gap:0}
+  .kv dt{font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--light); margin-top:11px}
+  .kv dt:first-of-type{margin-top:0}
+  .kv dd{font-size:14px; margin:2px 0 0}
+
+  /* 7k. dialogs behave as bottom sheets */
+  .modal-back{padding:0; align-items:flex-end}
+  .modal{width:100%; max-width:none; max-height:94vh; border-radius:22px 22px 0 0; display:flex; flex-direction:column}
+  .modal-head{padding:15px 17px}
+  .modal-body{flex:1 1 auto; max-height:none; padding:16px 17px; -webkit-overflow-scrolling:touch}
+  .modal-foot{padding:12px 17px calc(12px + env(safe-area-inset-bottom,0px))}
+  .modal-foot .btn{flex:1 1 44%; min-height:46px}
+  .set-grid{gap:14px}
+}
+@supports (max-height:100dvh){
+  @media (max-width:600px){
+    .modal{max-height:94dvh}
+  }
+}
+@media (max-width:360px){
+  .filters{grid-template-columns:1fr}
+  .stat-grid{gap:9px}
+  .adm-tabs button{font-size:9.5px; padding:6px 2px 4px; min-height:50px}
+  .row-actions,.own-actions{grid-template-columns:1fr}
+}
+@media (orientation:landscape) and (max-height:560px){
+  .adm-tabs{padding:3px 5px calc(3px + env(safe-area-inset-bottom,0px))}
+  .adm-tabs button{min-height:44px; font-size:10px; gap:2px; padding:5px 3px 4px}
+  .adm-body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+  .modal{max-height:98vh}
+}
+@media print{
+  .adm-tabs{display:none}
+}
 /* -- 5c. print ----------------------------------------------------------- */
 @media print{
   .adm-side,.adm-top,.nav,.nav-burger,.nav-sheet,.nav-scrim,.ft,.lq-bar,
