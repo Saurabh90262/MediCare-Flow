@@ -39,18 +39,18 @@
  *   8. Walk-in patients may be added without an email address.
  * ========================================================================== */
 
-'use strict';
+"use strict";
 
-require('dotenv').config();
+require("dotenv").config();
 
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const crypto = require('crypto');
-const http = require('http');
-const cron = require('node-cron');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const crypto = require("crypto");
+const http = require("http");
+const cron = require("node-cron");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 /* Socket.IO is loaded OPTIONALLY on purpose. If the package is not installed
    the API still boots exactly as before and every screen falls back to its
@@ -58,7 +58,7 @@ const jwt = require('jsonwebtoken');
    queue offline. Check GET /api/health to see which mode is active. */
 let SocketServer = null;
 try {
-  SocketServer = require('socket.io').Server;
+  SocketServer = require("socket.io").Server;
 } catch (_socketIoNotInstalled) {
   SocketServer = null;
 }
@@ -67,13 +67,15 @@ let io = null;
 /* ---------------------------------------------------------------- config -- */
 
 const PORT = Number(process.env.PORT) || 5000;
-const MONGODB_URI = process.env.MONGODB_URI || '';
-const DB_NAME = process.env.DB_NAME || 'medicareflow';
-const JWT_SECRET = process.env.JWT_SECRET || 'medicare-flow-dev-secret-change-me';
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || '';
-const TZ = process.env.TIMEZONE || 'Asia/Kolkata';
+const MONGODB_URI = process.env.MONGODB_URI || "";
+const DB_NAME = process.env.DB_NAME || "medicareflow";
+const JWT_SECRET =
+  process.env.JWT_SECRET || "medicare-flow-dev-secret-change-me";
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "";
+const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 // Render injects RENDER_EXTERNAL_URL on its own; KEEPALIVE_URL overrides it.
-const KEEPALIVE_URL = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '';
+const KEEPALIVE_URL =
+  process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || "";
 const KEEPALIVE_MINUTES = Number(process.env.KEEPALIVE_MINUTES || 14);
 
 /* Cloudflare R2 image storage. R2 speaks the S3 API, so uploads are signed with
@@ -81,47 +83,65 @@ const KEEPALIVE_MINUTES = Number(process.env.KEEPALIVE_MINUTES || 14);
    no third-party upload service, nothing new in package.json. Leave these blank
    and the app still boots; the photo picker simply reports storage is off. */
 // String(), not the str() helper - that const is declared far below this line.
-const R2_ACCOUNT_ID = String(process.env.R2_ACCOUNT_ID || '').trim();
-const R2_ACCESS_KEY_ID = String(process.env.R2_ACCESS_KEY_ID || '').trim();
-const R2_SECRET_ACCESS_KEY = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
-const R2_BUCKET_NAME = String(process.env.R2_BUCKET_NAME || '').trim();
+const R2_ACCOUNT_ID = String(process.env.R2_ACCOUNT_ID || "").trim();
+const R2_ACCESS_KEY_ID = String(process.env.R2_ACCESS_KEY_ID || "").trim();
+const R2_SECRET_ACCESS_KEY = String(
+  process.env.R2_SECRET_ACCESS_KEY || "",
+).trim();
+const R2_BUCKET_NAME = String(process.env.R2_BUCKET_NAME || "").trim();
 /* OPTIONAL. Point this at an R2 public bucket URL or custom domain and photos
    are served from Cloudflare's edge. Leave it blank and they stream through
    GET /api/images/:key instead, which needs zero R2 dashboard configuration. */
-const R2_PUBLIC_URL = String(process.env.R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+const R2_PUBLIC_URL = String(process.env.R2_PUBLIC_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 const MAX_IMAGE_BYTES = 900 * 1024; // 900 KB ceiling, enforced server-side too
 
 /* Appointment booking OTP is OFF: patients book in one step and email is
    optional. The OTP routes are kept intact, not deleted - set
    REQUIRE_BOOKING_OTP=true in .env to switch that step back on. */
-const REQUIRE_BOOKING_OTP = String(process.env.REQUIRE_BOOKING_OTP || 'false').trim().toLowerCase() === 'true';
+const REQUIRE_BOOKING_OTP =
+  String(process.env.REQUIRE_BOOKING_OTP || "false")
+    .trim()
+    .toLowerCase() === "true";
 
 /* Master admin (the platform owner). Credentials live in the environment on
    purpose - there is no owner row in MongoDB, so no API call can ever create
    or escalate one. OWNER_EMAIL receives every new listing request. */
 // String(), not the str() helper - that const is declared far below this line.
-const OWNER_ID = String(process.env.OWNER_ID || 'owner').trim().toLowerCase();
-const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
-const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
-const SITE_URL = String(process.env.SITE_URL || '').trim().replace(/\/+$/, '');
+const OWNER_ID = String(process.env.OWNER_ID || "owner")
+  .trim()
+  .toLowerCase();
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "";
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || "")
+  .trim()
+  .toLowerCase();
+const SITE_URL = String(process.env.SITE_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 
-const BRAND = 'MediCare Flow';
+const BRAND = "MediCare Flow";
 const CLEANUP_DAYS = 15; // appointments older than this are deleted nightly
 const BOOKING_DAYS = 5; // booking window = today + next 5 days
 const OTP_TTL_MS = 10 * 60 * 1000;
 const RESET_TTL_MS = 15 * 60 * 1000;
-const SESSION_TTL = '12h';
+const SESSION_TTL = "12h";
 const BCRYPT_ROUNDS = 10;
 
 const app = express();
 
-app.use(cors({ origin: '*' }));
-app.use(express.json({ limit: '1mb' }));
+app.use(cors({ origin: "*" }));
+app.use(express.json({ limit: "1mb" }));
 
 // A bad JSON body must not produce an HTML error page.
 app.use((err, _req, res, next) => {
-  if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
-    return res.status(400).json({ success: false, message: 'Request body was not valid JSON.' });
+  if (
+    err &&
+    (err.type === "entity.parse.failed" || err instanceof SyntaxError)
+  ) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Request body was not valid JSON." });
   }
   return next(err);
 });
@@ -135,34 +155,50 @@ const clinicSchema = new mongoose.Schema(
     doctorName: { type: String, required: true, trim: true },
     specialization: { type: String, required: true, trim: true },
     address: { type: String, required: true, trim: true },
-    city: { type: String, default: '', trim: true },
+    city: { type: String, default: "", trim: true },
     phone: { type: String, required: true, trim: true },
-    photo: { type: String, default: '', trim: true },
+    photo: { type: String, default: "", trim: true },
     /* R2 object name behind `photo`. Stored so replacing a photo or deleting a
        clinic can also remove the old file instead of orphaning it in R2. */
-    photoKey: { type: String, default: '', trim: true },
-    about: { type: String, default: '', trim: true },
-    timings: { type: String, default: '', trim: true },
-    adminUserId: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    photoKey: { type: String, default: "", trim: true },
+    about: { type: String, default: "", trim: true },
+    timings: { type: String, default: "", trim: true },
+    adminUserId: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true,
+    },
     adminEmail: { type: String, required: true, trim: true, lowercase: true },
     passwordHash: { type: String, required: true },
-    resetCodeHash: { type: String, default: '' },
+    resetCodeHash: { type: String, default: "" },
     resetExpires: { type: Date, default: null },
     active: { type: Boolean, default: true },
     /* Listing approval workflow. Registering creates a PENDING clinic; only the
        platform owner can move it to approved, which is what puts it on the
        public homepage. `hidden` is a separate, reversible owner switch that
        delists an approved clinic without rejecting it. */
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+      index: true,
+    },
     hidden: { type: Boolean, default: false },
     decidedAt: { type: Date, default: null },
-    decidedBy: { type: String, default: '' },
-    rejectionNote: { type: String, default: '' },
+    decidedBy: { type: String, default: "" },
+    rejectionNote: { type: String, default: "" },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-clinicSchema.index({ clinicName: 'text', doctorName: 'text', specialization: 'text', city: 'text' });
+clinicSchema.index({
+  clinicName: "text",
+  doctorName: "text",
+  specialization: "text",
+  city: "text",
+});
 clinicSchema.index({ status: 1, hidden: 1, createdAt: -1 });
 
 // Every original MTSS field is preserved. clinicId + source are the additions.
@@ -172,21 +208,30 @@ const appointmentSchema = new mongoose.Schema(
     bookingId: { type: String, required: true, unique: true },
     bookingNumber: { type: Number, required: true },
     name: { type: String, required: true, trim: true },
-    gender: { type: String, enum: ['Male', 'Female', 'Other'], required: true },
+    gender: { type: String, enum: ["Male", "Female", "Other"], required: true },
     age: { type: Number, required: true, min: 1, max: 120 },
     weight: { type: Number, required: true, min: 1 },
     date: { type: String, required: true, index: true },
     mobile: { type: String, required: true, trim: true },
-    email: { type: String, default: '', trim: true, lowercase: true },
+    email: { type: String, default: "", trim: true, lowercase: true },
     address: { type: String, required: true, trim: true },
-    quota: { type: String, enum: ['General', 'Emergency'], default: 'General', required: true },
-    status: { type: String, enum: ['booked', 'visited', 'cancelled'], default: 'booked' },
-    source: { type: String, enum: ['online', 'walk-in'], default: 'online' },
+    quota: {
+      type: String,
+      enum: ["General", "Emergency"],
+      default: "General",
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: ["booked", "visited", "cancelled"],
+      default: "booked",
+    },
+    source: { type: String, enum: ["online", "walk-in"], default: "online" },
     // Set the moment a token is marked visited, cleared when reverted. This is
     // what makes "now serving" and the consultation-pace estimate possible.
     visitedAt: { type: Date, default: null },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Deliberately NOT unique: the atomic counter guarantees ordering, and a unique
@@ -206,49 +251,64 @@ const queueTokenSchema = new mongoose.Schema(
     date: { type: String, required: true },
     seq: { type: Number, default: 0 },
   },
-  { timestamps: true, collection: 'queuetokens' }
+  { timestamps: true, collection: "queuetokens" },
 );
 
 queueTokenSchema.index({ clinicId: 1, date: 1 }, { unique: true });
 
-const Clinic = mongoose.model('Clinic', clinicSchema);
-const Appointment = mongoose.model('Appointment', appointmentSchema);
-const QueueToken = mongoose.model('QueueToken', queueTokenSchema);
+const Clinic = mongoose.model("Clinic", clinicSchema);
+const Appointment = mongoose.model("Appointment", appointmentSchema);
+const QueueToken = mongoose.model("QueueToken", queueTokenSchema);
 
 /* ------------------------------------------------------- database startup -- */
 
-mongoose.set('strictQuery', true);
+mongoose.set("strictQuery", true);
 
 // Drops leftover unique indexes from the single-clinic era. Data is untouched:
 // only index definitions are removed, and only when they lack clinicId.
 async function reconcileIndexes() {
-  const keep = new Set(['_id_', 'bookingId_1']);
+  const keep = new Set(["_id_", "bookingId_1"]);
   try {
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     const names = collections.map((c) => c.name);
 
-    if (names.includes('appointments')) {
-      const coll = mongoose.connection.collection('appointments');
+    if (names.includes("appointments")) {
+      const coll = mongoose.connection.collection("appointments");
       const indexes = await coll.indexes();
       for (const index of indexes) {
         const keys = Object.keys(index.key || {});
-        const legacy = index.unique && !keep.has(index.name) && !keys.includes('clinicId');
+        const legacy =
+          index.unique && !keep.has(index.name) && !keys.includes("clinicId");
         if (legacy) {
           await coll.dropIndex(index.name);
-          console.log('[fix] Dropped legacy unique index appointments.' + index.name);
+          console.log(
+            "[fix] Dropped legacy unique index appointments." + index.name,
+          );
         }
       }
     }
 
-    if (names.includes('queuecounters')) {
-      const stale = await mongoose.connection.collection('queuecounters').countDocuments();
-      console.log('[info] Old queuecounters collection found (' + stale + ' docs). It is no longer used and can be deleted from Atlas.');
+    if (names.includes("queuecounters")) {
+      const stale = await mongoose.connection
+        .collection("queuecounters")
+        .countDocuments();
+      console.log(
+        "[info] Old queuecounters collection found (" +
+          stale +
+          " docs). It is no longer used and can be deleted from Atlas.",
+      );
     }
 
-    await Promise.all([Clinic.syncIndexes(), Appointment.syncIndexes(), QueueToken.syncIndexes()]);
-    console.log('[OK] Indexes verified');
+    await Promise.all([
+      Clinic.syncIndexes(),
+      Appointment.syncIndexes(),
+      QueueToken.syncIndexes(),
+    ]);
+    console.log("[OK] Indexes verified");
   } catch (error) {
-    console.error('[warn] Index reconciliation skipped:', error.message);
+    console.error("[warn] Index reconciliation skipped:", error.message);
   }
 }
 
@@ -263,35 +323,51 @@ async function migrateLegacyPhotos() {
   try {
     const result = await Clinic.updateMany(
       {
-        photo: { $nin: ['', null] },
-        $or: [{ photoKey: { $exists: false } }, { photoKey: '' }, { photoKey: null }],
+        photo: { $nin: ["", null] },
+        $or: [
+          { photoKey: { $exists: false } },
+          { photoKey: "" },
+          { photoKey: null },
+        ],
       },
-      { $set: { photo: '', photoKey: '' } }
+      { $set: { photo: "", photoKey: "" } },
     );
     const changed = result.modifiedCount || result.nModified || 0;
-    if (changed) console.log('[OK] Photo migration: cleared ' + changed + ' demo photo URL(s).');
+    if (changed)
+      console.log(
+        "[OK] Photo migration: cleared " + changed + " demo photo URL(s).",
+      );
   } catch (error) {
-    console.error('[warn] Photo migration skipped:', error.message);
+    console.error("[warn] Photo migration skipped:", error.message);
   }
 }
 
 async function migrateListingStatus() {
   try {
     const result = await Clinic.updateMany(
-      { $or: [{ status: { $exists: false } }, { status: null }, { status: '' }] },
-      { $set: { status: 'approved', hidden: false } }
+      {
+        $or: [{ status: { $exists: false } }, { status: null }, { status: "" }],
+      },
+      { $set: { status: "approved", hidden: false } },
     );
     const changed = result.modifiedCount || result.nModified || 0;
-    if (changed) console.log('[OK] Listing migration: ' + changed + ' existing clinic(s) kept approved.');
+    if (changed)
+      console.log(
+        "[OK] Listing migration: " +
+          changed +
+          " existing clinic(s) kept approved.",
+      );
     await migrateLegacyPhotos();
   } catch (error) {
-    console.error('[warn] Listing migration skipped:', error.message);
+    console.error("[warn] Listing migration skipped:", error.message);
   }
 }
 
 async function connectDb(attempt = 1) {
   if (!MONGODB_URI) {
-    console.error('[ERROR] MONGODB_URI is missing. Add it to Backend/.env, then restart.');
+    console.error(
+      "[ERROR] MONGODB_URI is missing. Add it to Backend/.env, then restart.",
+    );
     return;
   }
   try {
@@ -304,11 +380,16 @@ async function connectDb(attempt = 1) {
     console.log('[OK] MongoDB Atlas connected -> database "' + DB_NAME + '"');
     await reconcileIndexes();
     await migrateListingStatus();
-    await runCleanup('startup');
+    await runCleanup("startup");
   } catch (error) {
-    console.error('[ERROR] MongoDB connection failed (attempt ' + attempt + '):', error.message);
+    console.error(
+      "[ERROR] MongoDB connection failed (attempt " + attempt + "):",
+      error.message,
+    );
     if (/IP|whitelist|ENOTFOUND|querySrv/i.test(error.message)) {
-      console.error('        Hint: allow your current IP in Atlas -> Network Access, and check the URI.');
+      console.error(
+        "        Hint: allow your current IP in Atlas -> Network Access, and check the URI.",
+      );
     }
     setTimeout(() => connectDb(attempt + 1), Math.min(30000, attempt * 5000));
   }
@@ -316,31 +397,67 @@ async function connectDb(attempt = 1) {
 
 connectDb();
 
-mongoose.connection.on('disconnected', () => console.warn('[warn] MongoDB disconnected'));
-mongoose.connection.on('reconnected', () => console.log('[OK] MongoDB reconnected'));
+mongoose.connection.on("disconnected", () =>
+  console.warn("[warn] MongoDB disconnected"),
+);
+mongoose.connection.on("reconnected", () =>
+  console.log("[OK] MongoDB reconnected"),
+);
 
 const dbUp = () => mongoose.connection.readyState === 1;
 
 // Any /api route except /api/health needs a live database.
-app.use('/api', (req, res, next) => {
-  if (req.originalUrl.startsWith('/api/health')) return next();
+app.use("/api", (req, res, next) => {
+  if (req.originalUrl.startsWith("/api/health")) return next();
   // Photos live in R2, not Mongo, so they stay visible if the database blips.
-  if (req.originalUrl.startsWith('/api/images/')) return next();
+  if (req.originalUrl.startsWith("/api/images/")) return next();
   if (dbUp()) return next();
   return res.status(503).json({
     success: false,
-    message: 'Database is not connected yet. Check MONGODB_URI in Backend/.env and your Atlas IP access list.',
+    message:
+      "Database is not connected yet. Check MONGODB_URI in Backend/.env and your Atlas IP access list.",
   });
 });
 
 /* ---------------------------------------------------------------- helpers -- */
 
-const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const ah = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
-const esc = (value = '') =>
-  String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+const esc = (value = "") =>
+  String(value).replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      })[ch],
+  );
 
-const str = (value) => String(value === undefined || value === null ? '' : value).trim();
+const str = (value) =>
+  String(value === undefined || value === null ? "" : value).trim();
+
+/* Any ?date= that was not a real YYYY-MM-DD used to flow straight into the
+   aggregation and into the label formatter, producing an "Invalid Date" board
+   and an empty queue that looked like data loss. Anything malformed - or
+   impossible, like 2026-02-31 - now falls back to the caller's default. */
+const ymdOr = (value, fallback) => {
+  const v = str(value);
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v)) return fallback;
+  const [y, m, d] = v.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  if (isNaN(dt.getTime())) return fallback;
+  if (
+    dt.getUTCFullYear() !== y ||
+    dt.getUTCMonth() + 1 !== m ||
+    dt.getUTCDate() !== d
+  )
+    return fallback;
+  return v;
+};
 
 /* One strict address test used everywhere. Requires an @, a dot in the domain
    and a 2+ letter TLD, so "saurabhgmail" and "saurabh@gmail" are both rejected
@@ -348,11 +465,16 @@ const str = (value) => String(value === undefined || value === null ? '' : value
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/;
 
 function todayStr() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 function addDays(ymd, days) {
-  const [y, m, d] = ymd.split('-').map(Number);
+  const [y, m, d] = ymd.split("-").map(Number);
   const base = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   base.setUTCDate(base.getUTCDate() + days);
   return base.toISOString().slice(0, 10);
@@ -368,44 +490,57 @@ function getAvailableDates() {
 }
 
 function dateLabel(ymd) {
-  if (!ymd) return '';
-  const [y, m, d] = ymd.split('-').map(Number);
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(ymd || ""))) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-  const nice = new Intl.DateTimeFormat('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }).format(dt);
+  const nice = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "UTC",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(dt);
   const t = todayStr();
-  if (ymd === t) return 'Today, ' + nice;
-  if (ymd === addDays(t, 1)) return 'Tomorrow, ' + nice;
+  if (ymd === t) return "Today, " + nice;
+  if (ymd === addDays(t, 1)) return "Tomorrow, " + nice;
   return nice;
 }
 
 function longDate(ymd) {
-  if (!ymd) return '';
-  const [y, m, d] = ymd.split('-').map(Number);
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(ymd || ""))) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-  return new Intl.DateTimeFormat('en-IN', {
-    timeZone: 'UTC',
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "UTC",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   }).format(dt);
 }
 
 function slugify(value) {
   return str(value)
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
     .slice(0, 32);
 }
 
 function clinicCode(clinicId) {
-  const letters = str(clinicId).replace(/[^a-z0-9]/gi, '').toUpperCase();
-  return (letters.slice(0, 4) || 'MCFL').padEnd(4, 'X');
+  const letters = str(clinicId)
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase();
+  return (letters.slice(0, 4) || "MCFL").padEnd(4, "X");
 }
 
 function newBookingId(clinicId) {
-  return clinicCode(clinicId) + '-' + Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+  return (
+    clinicCode(clinicId) +
+    "-" +
+    Date.now().toString(36).toUpperCase() +
+    "-" +
+    crypto.randomBytes(2).toString("hex").toUpperCase()
+  );
 }
 
 function sixDigits() {
@@ -420,11 +555,11 @@ function publicClinic(clinic) {
     doctorName: raw.doctorName,
     specialization: raw.specialization,
     address: raw.address,
-    city: raw.city || '',
+    city: raw.city || "",
     phone: raw.phone,
-    photo: raw.photo || '',
-    about: raw.about || '',
-    timings: raw.timings || '',
+    photo: raw.photo || "",
+    about: raw.about || "",
+    timings: raw.timings || "",
     createdAt: raw.createdAt,
   };
 }
@@ -435,9 +570,9 @@ function adminClinic(clinic) {
     adminUserId: raw.adminUserId,
     adminEmail: raw.adminEmail,
     // The clinic dashboard uses these to show its own approval banner.
-    status: raw.status || 'pending',
+    status: raw.status || "pending",
     hidden: Boolean(raw.hidden),
-    rejectionNote: raw.rejectionNote || '',
+    rejectionNote: raw.rejectionNote || "",
   });
 }
 
@@ -446,15 +581,19 @@ function adminClinic(clinic) {
      bookableFilter  - what can still take bookings and serve a live queue.
    Hidden clinics stay BOOKABLE on purpose, so temporarily delisting a clinic
    never breaks a patient who already holds a token or a direct booking link. */
-const directoryFilter = () => ({ status: 'approved', hidden: false, active: true });
-const bookableFilter = () => ({ status: 'approved', active: true });
+const directoryFilter = () => ({
+  status: "approved",
+  hidden: false,
+  active: true,
+});
+const bookableFilter = () => ({ status: "approved", active: true });
 
 function ownerClinic(clinic, counts) {
   const raw = clinic && clinic.toObject ? clinic.toObject() : clinic || {};
   return Object.assign(adminClinic(raw), {
     active: raw.active !== false,
     decidedAt: raw.decidedAt || null,
-    decidedBy: raw.decidedBy || '',
+    decidedBy: raw.decidedBy || "",
     updatedAt: raw.updatedAt,
     appointments: counts ? counts.total : 0,
     appointmentsToday: counts ? counts.today : 0,
@@ -466,103 +605,167 @@ function ownerClinic(clinic, counts) {
 /* Cloudflare R2 is S3-compatible, so a signed PUT is the whole upload. Below is
    AWS Signature V4 built on the crypto module that ships with Node. */
 
-const R2_HOST = R2_ACCOUNT_ID ? R2_ACCOUNT_ID + '.r2.cloudflarestorage.com' : '';
-const R2_REGION = 'auto';
-const EMPTY_SHA256 = crypto.createHash('sha256').update('').digest('hex');
+const R2_HOST = R2_ACCOUNT_ID
+  ? R2_ACCOUNT_ID + ".r2.cloudflarestorage.com"
+  : "";
+const R2_REGION = "auto";
+const EMPTY_SHA256 = crypto.createHash("sha256").update("").digest("hex");
 
 function r2Ready() {
-  return Boolean(R2_HOST && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+  return Boolean(
+    R2_HOST && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME,
+  );
 }
 
 function hmac256(key, value) {
-  return crypto.createHmac('sha256', key).update(value, 'utf8').digest();
+  return crypto.createHmac("sha256", key).update(value, "utf8").digest();
 }
 
 function sha256Hex(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 function r2ObjectUrl(key) {
-  return 'https://' + R2_HOST + '/' + R2_BUCKET_NAME + '/' + encodeURIComponent(key);
+  return (
+    "https://" + R2_HOST + "/" + R2_BUCKET_NAME + "/" + encodeURIComponent(key)
+  );
 }
 
 /* Builds the Authorization header for exactly one R2 request. */
 function r2Sign(method, key, payloadHash, extraHeaders) {
-  const amzDate = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const amzDate = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
   const stamp = amzDate.slice(0, 8);
-  const canonicalUri = '/' + R2_BUCKET_NAME + '/' + encodeURIComponent(key);
+  const canonicalUri = "/" + R2_BUCKET_NAME + "/" + encodeURIComponent(key);
 
   const raw = Object.assign(
-    { host: R2_HOST, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate },
-    extraHeaders || {}
+    {
+      host: R2_HOST,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    },
+    extraHeaders || {},
   );
   const lower = {};
   Object.keys(raw).forEach((name) => {
     lower[name.toLowerCase()] = String(raw[name]).trim();
   });
   const names = Object.keys(lower).sort();
-  const canonicalHeaders = names.map((name) => name + ':' + lower[name] + '\n').join('');
-  const signedHeaders = names.join(';');
+  const canonicalHeaders = names
+    .map((name) => name + ":" + lower[name] + "\n")
+    .join("");
+  const signedHeaders = names.join(";");
 
-  const canonicalRequest = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
-  const scope = stamp + '/' + R2_REGION + '/s3/aws4_request';
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const scope = stamp + "/" + R2_REGION + "/s3/aws4_request";
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    scope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
 
-  let signing = hmac256('AWS4' + R2_SECRET_ACCESS_KEY, stamp);
+  let signing = hmac256("AWS4" + R2_SECRET_ACCESS_KEY, stamp);
   signing = hmac256(signing, R2_REGION);
-  signing = hmac256(signing, 's3');
-  signing = hmac256(signing, 'aws4_request');
-  const signature = crypto.createHmac('sha256', signing).update(stringToSign, 'utf8').digest('hex');
+  signing = hmac256(signing, "s3");
+  signing = hmac256(signing, "aws4_request");
+  const signature = crypto
+    .createHmac("sha256", signing)
+    .update(stringToSign, "utf8")
+    .digest("hex");
 
   return Object.assign({}, raw, {
     Authorization:
-      'AWS4-HMAC-SHA256 Credential=' +
+      "AWS4-HMAC-SHA256 Credential=" +
       R2_ACCESS_KEY_ID +
-      '/' +
+      "/" +
       scope +
-      ', SignedHeaders=' +
+      ", SignedHeaders=" +
       signedHeaders +
-      ', Signature=' +
+      ", Signature=" +
       signature,
   });
 }
 
 async function r2Put(key, body, contentType) {
-  if (!r2Ready()) throw new Error('R2 image storage is not configured.');
-  const headers = r2Sign('PUT', key, sha256Hex(body), { 'content-type': contentType });
-  const response = await fetch(r2ObjectUrl(key), { method: 'PUT', headers, body });
+  if (!r2Ready()) throw new Error("R2 image storage is not configured.");
+  const headers = r2Sign("PUT", key, sha256Hex(body), {
+    "content-type": contentType,
+  });
+  const response = await fetch(r2ObjectUrl(key), {
+    method: "PUT",
+    headers,
+    body,
+  });
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error('R2 responded ' + response.status + ' ' + detail.slice(0, 180));
+    const detail = await response.text().catch(() => "");
+    throw new Error(
+      "R2 responded " + response.status + " " + detail.slice(0, 180),
+    );
   }
   return key;
 }
 
 function r2Fetch(key) {
-  return fetch(r2ObjectUrl(key), { method: 'GET', headers: r2Sign('GET', key, EMPTY_SHA256, null) });
+  return fetch(r2ObjectUrl(key), {
+    method: "GET",
+    headers: r2Sign("GET", key, EMPTY_SHA256, null),
+  });
 }
 
 async function r2Delete(key) {
   if (!r2Ready() || !key) return false;
   try {
-    const response = await fetch(r2ObjectUrl(key), { method: 'DELETE', headers: r2Sign('DELETE', key, EMPTY_SHA256, null) });
+    const response = await fetch(r2ObjectUrl(key), {
+      method: "DELETE",
+      headers: r2Sign("DELETE", key, EMPTY_SHA256, null),
+    });
     return response.ok || response.status === 404;
   } catch (error) {
-    console.error('[warn] R2 delete failed for ' + key + ':', error.message);
+    console.error("[warn] R2 delete failed for " + key + ":", error.message);
     return false;
   }
 }
 
 /* Content type comes from the bytes, never from the client's Content-Type. */
 const IMAGE_KINDS = [
-  { ext: 'jpg', mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  { ext: 'png', mime: 'image/png', test: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
-  { ext: 'gif', mime: 'image/gif', test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
   {
-    ext: 'webp',
-    mime: 'image/webp',
+    ext: "jpg",
+    mime: "image/jpeg",
+    test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  },
+  {
+    ext: "png",
+    mime: "image/png",
     test: (b) =>
-      b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50,
+      b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+  },
+  {
+    ext: "gif",
+    mime: "image/gif",
+    test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46,
+  },
+  {
+    ext: "webp",
+    mime: "image/webp",
+    test: (b) =>
+      b[0] === 0x52 &&
+      b[1] === 0x49 &&
+      b[2] === 0x46 &&
+      b[3] === 0x46 &&
+      b[8] === 0x57 &&
+      b[9] === 0x45 &&
+      b[10] === 0x42 &&
+      b[11] === 0x50,
   },
 ];
 
@@ -575,10 +778,18 @@ function sniffImage(buffer) {
 }
 
 function imageUrlFor(req, key) {
-  if (R2_PUBLIC_URL) return R2_PUBLIC_URL + '/' + key;
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
-  const host = String(req.headers['x-forwarded-host'] || req.get('host') || 'localhost:' + PORT).split(',')[0].trim();
-  return proto + '://' + host + '/api/images/' + key;
+  if (R2_PUBLIC_URL) return R2_PUBLIC_URL + "/" + key;
+  const proto = String(
+    req.headers["x-forwarded-proto"] || req.protocol || "http",
+  )
+    .split(",")[0]
+    .trim();
+  const host = String(
+    req.headers["x-forwarded-host"] || req.get("host") || "localhost:" + PORT,
+  )
+    .split(",")[0]
+    .trim();
+  return proto + "://" + host + "/api/images/" + key;
 }
 
 /* The photo picker is reachable before a clinic exists (during registration),
@@ -588,7 +799,9 @@ const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
 
 function uploadAllowed(ip) {
   const now = Date.now();
-  const recent = (uploadHits.get(ip) || []).filter((at) => now - at < UPLOAD_WINDOW_MS);
+  const recent = (uploadHits.get(ip) || []).filter(
+    (at) => now - at < UPLOAD_WINDOW_MS,
+  );
   if (recent.length >= 20) {
     uploadHits.set(ip, recent);
     return false;
@@ -597,7 +810,8 @@ function uploadAllowed(ip) {
   uploadHits.set(ip, recent);
   if (uploadHits.size > 400) {
     for (const [addr, hits] of uploadHits) {
-      if (!hits.some((at) => now - at < UPLOAD_WINDOW_MS)) uploadHits.delete(addr);
+      if (!hits.some((at) => now - at < UPLOAD_WINDOW_MS))
+        uploadHits.delete(addr);
     }
   }
   return true;
@@ -619,27 +833,39 @@ function validateAppointmentForm(data, options = {}) {
   const address = str(form.address);
   const quota = str(form.quota);
 
-  if (!name || name.length < 2) return 'Please enter the full name of the patient.';
-  if (!['Male', 'Female', 'Other'].includes(gender)) return 'Please select a gender.';
-  if (!Number.isFinite(age) || age < 1 || age > 120) return 'Age must be between 1 and 120.';
-  if (!Number.isFinite(weight) || weight < 1) return 'Please enter a valid weight in kg.';
-  if (!['General', 'Emergency'].includes(quota)) return 'Please choose General or Emergency quota.';
-  if (!/^\d{10}$/.test(mobile)) return 'Mobile number must be exactly 10 digits.';
-  if (!address || address.length < 4) return 'Please enter the patient address.';
+  if (!name || name.length < 2)
+    return "Please enter the full name of the patient.";
+  if (!["Male", "Female", "Other"].includes(gender))
+    return "Please select a gender.";
+  if (!Number.isFinite(age) || age < 1 || age > 120)
+    return "Age must be between 1 and 120.";
+  if (!Number.isFinite(weight) || weight < 1)
+    return "Please enter a valid weight in kg.";
+  if (!["General", "Emergency"].includes(quota))
+    return "Please choose General or Emergency quota.";
+  if (!/^\d{10}$/.test(mobile))
+    return "Mobile number must be exactly 10 digits.";
+  if (!address || address.length < 4)
+    return "Please enter the patient address.";
 
   /* Email is OPTIONAL for every booking source now that appointments no longer
      need an OTP. Anything typed in must still be a real address. */
   if (email && !EMAIL_RE.test(email)) {
-    return 'Please enter a valid email address like name@example.com, or leave it blank.';
+    return "Please enter a valid email address like name@example.com, or leave it blank.";
   }
   if (options.requireEmail === true && !email) {
-    return 'An email address is required to receive the verification code.';
+    return "An email address is required to receive the verification code.";
   }
 
   if (walkIn) {
-    if (date !== todayStr()) return 'Walk-in patients can only be added to today\'s queue.';
+    if (date !== todayStr())
+      return "Walk-in patients can only be added to today's queue.";
   } else if (!getAvailableDates().includes(date)) {
-    return 'Appointments can only be booked from today up to the next ' + BOOKING_DAYS + ' days.';
+    return (
+      "Appointments can only be booked from today up to the next " +
+      BOOKING_DAYS +
+      " days."
+    );
   }
   return null;
 }
@@ -654,20 +880,34 @@ function normalizeForm(form, source) {
     mobile: str(form.mobile),
     email: str(form.email).toLowerCase(),
     address: str(form.address),
-    quota: str(form.quota) === 'Emergency' ? 'Emergency' : 'General',
-    source: source === 'walk-in' ? 'walk-in' : 'online',
+    quota: str(form.quota) === "Emergency" ? "Emergency" : "General",
+    source: source === "walk-in" ? "walk-in" : "online",
   };
 }
 
 function validateRegistration(body) {
-  const required = ['clinicName', 'doctorName', 'specialization', 'address', 'phone', 'adminEmail', 'adminUserId', 'password'];
+  const required = [
+    "clinicName",
+    "doctorName",
+    "specialization",
+    "address",
+    "phone",
+    "adminEmail",
+    "adminUserId",
+    "password",
+  ];
   for (const field of required) {
-    if (!str(body[field])) return 'Please fill in every required field (' + field + ' is missing).';
+    if (!str(body[field]))
+      return "Please fill in every required field (" + field + " is missing).";
   }
-  if (!/^\d{10}$/.test(str(body.phone))) return 'Clinic phone number must be exactly 10 digits.';
-  if (!EMAIL_RE.test(str(body.adminEmail))) return 'Please enter a valid admin email address.';
-  if (!/^[a-zA-Z0-9_.]{4,24}$/.test(str(body.adminUserId))) return 'Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).';
-  if (str(body.password).length < 6) return 'Password must be at least 6 characters long.';
+  if (!/^\d{10}$/.test(str(body.phone)))
+    return "Clinic phone number must be exactly 10 digits.";
+  if (!EMAIL_RE.test(str(body.adminEmail)))
+    return "Please enter a valid admin email address.";
+  if (!/^[a-zA-Z0-9_.]{4,24}$/.test(str(body.adminUserId)))
+    return "Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).";
+  if (str(body.password).length < 6)
+    return "Password must be at least 6 characters long.";
   return null;
 }
 
@@ -678,10 +918,17 @@ function validateRegistration(body) {
 async function seedCounter(clinicId, date) {
   const existing = await QueueToken.findOne({ clinicId, date }).lean();
   if (existing) return;
-  const last = await Appointment.find({ clinicId, date }).sort({ bookingNumber: -1 }).limit(1).lean();
+  const last = await Appointment.find({ clinicId, date })
+    .sort({ bookingNumber: -1 })
+    .limit(1)
+    .lean();
   const start = last.length ? Number(last[0].bookingNumber) || 0 : 0;
   try {
-    await QueueToken.updateOne({ clinicId, date }, { $setOnInsert: { clinicId, date, seq: start } }, { upsert: true });
+    await QueueToken.updateOne(
+      { clinicId, date },
+      { $setOnInsert: { clinicId, date, seq: start } },
+      { upsert: true },
+    );
   } catch (error) {
     if (error.code !== 11000) throw error;
   }
@@ -693,7 +940,7 @@ async function getNextBookingNumber(clinicId, date) {
   const counter = await QueueToken.findOneAndUpdate(
     { clinicId, date },
     { $inc: { seq: 1 } },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { new: true, upsert: true, setDefaultsOnInsert: true },
   );
   return counter.seq;
 }
@@ -702,9 +949,15 @@ async function createAppointment(clinicId, form, source, attempt = 1) {
   const data = normalizeForm(form, source);
   const bookingNumber = await getNextBookingNumber(clinicId, data.date);
   try {
-    return await Appointment.create(Object.assign({ clinicId, bookingId: newBookingId(clinicId), bookingNumber }, data));
+    return await Appointment.create(
+      Object.assign(
+        { clinicId, bookingId: newBookingId(clinicId), bookingNumber },
+        data,
+      ),
+    );
   } catch (error) {
-    if (error.code === 11000 && attempt < 4) return createAppointment(clinicId, form, source, attempt + 1);
+    if (error.code === 11000 && attempt < 4)
+      return createAppointment(clinicId, form, source, attempt + 1);
     throw error;
   }
 }
@@ -715,35 +968,47 @@ async function createAppointment(clinicId, form, source, attempt = 1) {
 // web app. Only the branding is parameterised per clinic.
 // Live mailer state, exposed by GET /api/health/mailer. Check this first when
 // a registration or password-reset code does not arrive.
-const mailer = { sent: 0, failed: 0, lastOkAt: null, lastTo: '', lastError: '' };
+const mailer = {
+  sent: 0,
+  failed: 0,
+  lastOkAt: null,
+  lastTo: "",
+  lastError: "",
+};
 
 async function sendEmail({ to, subject, html }) {
   if (!to) {
     mailer.failed += 1;
-    mailer.lastError = 'No recipient address was supplied.';
+    mailer.lastError = "No recipient address was supplied.";
     return false;
   }
   if (!GOOGLE_SCRIPT_URL) {
     mailer.failed += 1;
-    mailer.lastError = 'GOOGLE_SCRIPT_URL is missing from the backend .env file.';
-    console.error('[ERROR] GOOGLE_SCRIPT_URL is not set - email skipped:', subject);
+    mailer.lastError =
+      "GOOGLE_SCRIPT_URL is missing from the backend .env file.";
+    console.error(
+      "[ERROR] GOOGLE_SCRIPT_URL is not set - email skipped:",
+      subject,
+    );
     return false;
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ to, subject, html }),
-      redirect: 'follow',
+      redirect: "follow",
       signal: controller.signal,
     });
     if (!response.ok) {
       mailer.failed += 1;
       mailer.lastError =
-        'Mailer responded with HTTP ' + response.status + '. Re-deploy the Apps Script web app with access set to "Anyone".';
-      console.error('[ERROR] Mailer responded with HTTP ' + response.status);
+        "Mailer responded with HTTP " +
+        response.status +
+        '. Re-deploy the Apps Script web app with access set to "Anyone".';
+      console.error("[ERROR] Mailer responded with HTTP " + response.status);
       return false;
     }
     const text = await response.text();
@@ -755,27 +1020,37 @@ async function sendEmail({ to, subject, html }) {
     }
     if (payload && payload.success === false) {
       mailer.failed += 1;
-      mailer.lastError = 'Mailer rejected the request: ' + (payload.error || 'unknown error');
-      console.error('[ERROR] Mailer rejected the request:', payload.error || 'unknown error');
+      mailer.lastError =
+        "Mailer rejected the request: " + (payload.error || "unknown error");
+      console.error(
+        "[ERROR] Mailer rejected the request:",
+        payload.error || "unknown error",
+      );
       return false;
     }
     mailer.sent += 1;
     mailer.lastOkAt = new Date().toISOString();
     mailer.lastTo = to;
-    mailer.lastError = '';
-    console.log('[mail] Sent to ' + to + ' :: ' + subject);
+    mailer.lastError = "";
+    console.log("[mail] Sent to " + to + " :: " + subject);
     return true;
   } catch (error) {
     mailer.failed += 1;
-    mailer.lastError = error.name === 'AbortError' ? 'Mailer timed out after 20s.' : 'Mailer failed: ' + error.message;
-    console.error('[ERROR] Mailer failed:', error.name === 'AbortError' ? 'timeout after 20s' : error.message);
+    mailer.lastError =
+      error.name === "AbortError"
+        ? "Mailer timed out after 20s."
+        : "Mailer failed: " + error.message;
+    console.error(
+      "[ERROR] Mailer failed:",
+      error.name === "AbortError" ? "timeout after 20s" : error.message,
+    );
     return false;
   } finally {
     clearTimeout(timer);
   }
 }
 
-const headerHTML = (clinic, accent = '#0f766e') => `
+const headerHTML = (clinic, accent = "#0f766e") => `
 <div style="background:linear-gradient(135deg,${accent},#0ea5e9);padding:26px 30px;text-align:center;">
   <p style="margin:0 0 6px;color:#d1fae5;font:600 11px/1 Arial,sans-serif;letter-spacing:2px;">${esc(BRAND).toUpperCase()}</p>
   <h2 style="margin:0;color:#ffffff;font:700 22px/1.3 Georgia,serif;">${esc(clinic.clinicName)}</h2>
@@ -792,13 +1067,13 @@ const footerHTML = (clinic) => `
 
 const shell = (clinic, body) =>
   `<div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;font-family:Arial,sans-serif;">${headerHTML(
-    clinic
+    clinic,
   )}${body}${footerHTML(clinic)}</div>`;
 
 const row = (label, value, strong = false) => `
   <tr>
     <td style="padding:11px 16px;border-bottom:1px solid #eef2f6;color:#64748b;font-size:13px;">${esc(label)}</td>
-    <td style="padding:11px 16px;border-bottom:1px solid #eef2f6;color:#0f172a;font-size:${strong ? '17px;font-weight:700' : '14px'};">${value}</td>
+    <td style="padding:11px 16px;border-bottom:1px solid #eef2f6;color:#0f172a;font-size:${strong ? "17px;font-weight:700" : "14px"};">${value}</td>
   </tr>`;
 
 function otpEmail(clinic, form, otp) {
@@ -807,46 +1082,46 @@ function otpEmail(clinic, form, otp) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Verify your appointment</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Hello ${esc(form.name)}, use the code below to confirm your booking at <b>${esc(
-      clinic.clinicName
-    )}</b>.</p>
+        clinic.clinicName,
+      )}</b>.</p>
       <div style="text-align:center;background:#f0fdfa;border:1px dashed #14b8a6;border-radius:12px;padding:22px;">
         <p style="margin:0 0 8px;color:#0f766e;font-size:12px;letter-spacing:1px;">YOUR ONE TIME PASSWORD</p>
         <p style="margin:0;font-size:34px;font-weight:700;letter-spacing:10px;color:#0f766e;">${esc(otp)}</p>
       </div>
       <table style="width:100%;border-collapse:collapse;margin-top:22px;">
-        ${row('Patient', esc(form.name))}
-        ${row('Appointment date', esc(longDate(form.date)))}
-        ${row('Quota', esc(form.quota))}
+        ${row("Patient", esc(form.name))}
+        ${row("Appointment date", esc(longDate(form.date)))}
+        ${row("Quota", esc(form.quota))}
       </table>
       <p style="margin:18px 0 0;color:#b45309;font-size:13px;">This code expires in 10 minutes. Never share it with anyone.</p>
-    </div>`
+    </div>`,
   );
 }
 
 function confirmEmail(clinic, appointment) {
-  const walkIn = appointment.source === 'walk-in';
+  const walkIn = appointment.source === "walk-in";
   return shell(
     clinic,
     `<div style="padding:30px;">
-      <h3 style="margin:0 0 6px;color:#059669;font-size:19px;">${walkIn ? 'You are in the queue' : 'Appointment confirmed'}</h3>
+      <h3 style="margin:0 0 6px;color:#059669;font-size:19px;">${walkIn ? "You are in the queue" : "Appointment confirmed"}</h3>
       <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.7;">Dear ${esc(
-        appointment.name
+        appointment.name,
       )}, your appointment has been registered successfully.</p>
       <div style="text-align:center;background:linear-gradient(135deg,#0f766e,#0ea5e9);border-radius:12px;padding:22px;">
         <p style="margin:0 0 6px;color:#d1fae5;font-size:12px;letter-spacing:1px;">YOUR QUEUE NUMBER</p>
         <p style="margin:0;font-size:44px;font-weight:700;color:#ffffff;line-height:1;">#${appointment.bookingNumber}</p>
       </div>
       <table style="width:100%;border-collapse:collapse;margin-top:22px;">
-        ${row('Booking ID', esc(appointment.bookingId), true)}
-        ${row('Patient', esc(appointment.name) + ' (' + esc(appointment.gender) + ', ' + appointment.age + ')')}
-        ${row('Date', esc(longDate(appointment.date)))}
-        ${row('Quota', appointment.quota === 'Emergency' ? '<span style="color:#dc2626;font-weight:700;">Emergency</span>' : 'General')}
-        ${row('Doctor', esc(clinic.doctorName))}
+        ${row("Booking ID", esc(appointment.bookingId), true)}
+        ${row("Patient", esc(appointment.name) + " (" + esc(appointment.gender) + ", " + appointment.age + ")")}
+        ${row("Date", esc(longDate(appointment.date)))}
+        ${row("Quota", appointment.quota === "Emergency" ? '<span style="color:#dc2626;font-weight:700;">Emergency</span>' : "General")}
+        ${row("Doctor", esc(clinic.doctorName))}
       </table>
       <div style="margin-top:20px;background:#fffbeb;border-left:4px solid #f59e0b;padding:14px 16px;border-radius:8px;">
         <p style="margin:0;color:#92400e;font-size:13px;line-height:1.7;">Please arrive 15-20 minutes before your queue number is called, and carry this booking ID.</p>
       </div>
-    </div>`
+    </div>`,
   );
 }
 
@@ -856,17 +1131,17 @@ function cancelEmail(clinic, appointment) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#dc2626;font-size:19px;">Appointment cancelled</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Dear ${esc(
-        appointment.name
+        appointment.name,
       )}, your appointment at <b>${esc(clinic.clinicName)}</b> has been cancelled by the clinic.</p>
       <table style="width:100%;border-collapse:collapse;">
-        ${row('Booking ID', esc(appointment.bookingId))}
-        ${row('Queue number', '#' + appointment.bookingNumber)}
-        ${row('Date', esc(longDate(appointment.date)))}
+        ${row("Booking ID", esc(appointment.bookingId))}
+        ${row("Queue number", "#" + appointment.bookingNumber)}
+        ${row("Date", esc(longDate(appointment.date)))}
       </table>
       <p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.7;">You can book a new appointment any time from ${esc(
-        BRAND
+        BRAND,
       )}. For help, call ${esc(clinic.phone)}.</p>
-    </div>`
+    </div>`,
   );
 }
 
@@ -876,15 +1151,15 @@ function welcomeEmail(clinic) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Welcome to ${esc(BRAND)}</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">${esc(
-        clinic.clinicName
+        clinic.clinicName,
       )} is now listed publicly and patients can start booking appointments right away.</p>
       <table style="width:100%;border-collapse:collapse;">
-        ${row('Admin user ID', esc(clinic.adminUserId), true)}
-        ${row('Clinic page', '/clinic/' + esc(clinic.clinicId))}
-        ${row('Specialization', esc(clinic.specialization))}
+        ${row("Admin user ID", esc(clinic.adminUserId), true)}
+        ${row("Clinic page", "/clinic/" + esc(clinic.clinicId))}
+        ${row("Specialization", esc(clinic.specialization))}
       </table>
       <p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.7;">Keep your password safe. If you forget it, use "Forgot password" on the sign-in screen and a reset code will be emailed to this address.</p>
-    </div>`
+    </div>`,
   );
 }
 
@@ -894,45 +1169,68 @@ function resetEmail(clinic, code) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Password reset code</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Use this code to set a new password for the ${esc(
-        clinic.clinicName
+        clinic.clinicName,
       )} dashboard.</p>
       <div style="text-align:center;background:#f0fdfa;border:1px dashed #14b8a6;border-radius:12px;padding:22px;">
         <p style="margin:0;font-size:34px;font-weight:700;letter-spacing:10px;color:#0f766e;">${esc(code)}</p>
       </div>
       <p style="margin:18px 0 0;color:#b45309;font-size:13px;">The code expires in 15 minutes. If you did not request it, you can ignore this email.</p>
-    </div>`
+    </div>`,
   );
 }
 
 /* ------------------------------------------------------------------- auth -- */
 
 const otpStore = new Map();
-const otpKey = (clinicId, email) => clinicId + '::' + str(email).toLowerCase();
+const otpKey = (clinicId, email) => clinicId + "::" + str(email).toLowerCase();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of otpStore) if (value.expires < now) otpStore.delete(key);
-}, 5 * 60 * 1000).unref();
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, value] of otpStore)
+      if (value.expires < now) otpStore.delete(key);
+  },
+  5 * 60 * 1000,
+).unref();
 
 function signToken(clinic) {
-  return jwt.sign({ clinicId: clinic.clinicId, adminUserId: clinic.adminUserId, clinicName: clinic.clinicName }, JWT_SECRET, {
-    expiresIn: SESSION_TTL,
-  });
+  return jwt.sign(
+    {
+      clinicId: clinic.clinicId,
+      adminUserId: clinic.adminUserId,
+      clinicName: clinic.clinicName,
+    },
+    JWT_SECRET,
+    {
+      expiresIn: SESSION_TTL,
+    },
+  );
 }
 
 // Replaces the old shared x-admin-secret header with per-clinic JWT auth.
 function clinicAuth(req, res, next) {
-  const raw = str(req.headers.authorization || req.headers['x-auth-token']);
-  const token = raw.replace(/^Bearer\s+/i, '');
-  if (!token) return res.status(401).json({ success: false, message: 'Please sign in to open your clinic dashboard.' });
+  const raw = str(req.headers.authorization || req.headers["x-auth-token"]);
+  const token = raw.replace(/^Bearer\s+/i, "");
+  if (!token)
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "Please sign in to open your clinic dashboard.",
+      });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    if (!payload.clinicId) throw new Error('missing clinicId');
+    if (!payload.clinicId) throw new Error("missing clinicId");
     req.admin = payload;
     req.clinicId = payload.clinicId; // the ONLY source of clinic scope
     return next();
   } catch (_error) {
-    return res.status(401).json({ success: false, message: 'Your session has expired. Please sign in again.' });
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "Your session has expired. Please sign in again.",
+      });
   }
 }
 
@@ -947,70 +1245,106 @@ function sameSecret(a, b) {
 }
 
 function signOwnerToken() {
-  return jwt.sign({ owner: true, ownerId: OWNER_ID }, JWT_SECRET, { expiresIn: SESSION_TTL });
+  return jwt.sign({ owner: true, ownerId: OWNER_ID }, JWT_SECRET, {
+    expiresIn: SESSION_TTL,
+  });
 }
 
 /* An owner token carries no clinicId, so it can never satisfy clinicAuth; a
    clinic token has no owner flag, so it can never satisfy ownerAuth. The two
    privilege levels cannot be swapped in either direction. */
 function ownerAuth(req, res, next) {
-  const raw = str(req.headers.authorization || req.headers['x-auth-token']);
-  const token = raw.replace(/^Bearer\s+/i, '');
-  if (!token) return res.status(401).json({ success: false, message: 'Please sign in to the master admin panel.' });
+  const raw = str(req.headers.authorization || req.headers["x-auth-token"]);
+  const token = raw.replace(/^Bearer\s+/i, "");
+  if (!token)
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "Please sign in to the master admin panel.",
+      });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.owner !== true) throw new Error('not an owner token');
+    if (payload.owner !== true) throw new Error("not an owner token");
     req.owner = payload;
     return next();
   } catch (_error) {
-    return res.status(401).json({ success: false, message: 'Your owner session has expired. Please sign in again.' });
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "Your owner session has expired. Please sign in again.",
+      });
   }
 }
 
 /* --------------------------------------------------------- public routes -- */
 
-app.get('/', (_req, res) =>
+app.get("/", (_req, res) =>
   res.json({
     success: true,
-    service: BRAND + ' API',
-    docs: '/api/health',
-    database: dbUp() ? 'connected' : 'not connected',
-  })
+    service: BRAND + " API",
+    docs: "/api/health",
+    database: dbUp() ? "connected" : "not connected",
+  }),
 );
 
-app.get('/api/health', (_req, res) =>
+app.get("/api/health", (_req, res) =>
   res.json({
     success: true,
-    service: BRAND + ' API',
-    database: dbUp() ? 'connected' : MONGODB_URI ? 'connecting' : 'MONGODB_URI missing',
+    service: BRAND + " API",
+    database: dbUp()
+      ? "connected"
+      : MONGODB_URI
+        ? "connecting"
+        : "MONGODB_URI missing",
     dbName: DB_NAME,
-    mailer: GOOGLE_SCRIPT_URL ? 'configured' : 'missing GOOGLE_SCRIPT_URL',
+    mailer: GOOGLE_SCRIPT_URL ? "configured" : "missing GOOGLE_SCRIPT_URL",
     timezone: TZ,
     today: todayStr(),
     port: PORT,
-    realtime: io ? 'socket.io live' : 'polling only - run: npm install socket.io',
+    realtime: io
+      ? "socket.io live"
+      : "polling only - run: npm install socket.io",
     liveViewers: io && io.engine ? io.engine.clientsCount : 0,
     keepAlive: keepAlive.enabled
-      ? 'every ' + keepAlive.minutes + ' min (ok ' + keepAlive.pings + ', failed ' + keepAlive.failed + ')'
-      : 'off',
+      ? "every " +
+        keepAlive.minutes +
+        " min (ok " +
+        keepAlive.pings +
+        ", failed " +
+        keepAlive.failed +
+        ")"
+      : "off",
     keepAliveTarget: keepAlive.target || null,
     lastKeepAliveAt: keepAlive.lastPingAt,
-    masterAdmin: OWNER_PASSWORD ? 'configured (id: ' + OWNER_ID + ')' : 'set OWNER_ID + OWNER_PASSWORD in .env',
-    approvalAlerts: OWNER_EMAIL ? 'to ' + maskEmail(OWNER_EMAIL) : 'set OWNER_EMAIL in .env',
+    masterAdmin: OWNER_PASSWORD
+      ? "configured (id: " + OWNER_ID + ")"
+      : "set OWNER_ID + OWNER_PASSWORD in .env",
+    approvalAlerts: OWNER_EMAIL
+      ? "to " + maskEmail(OWNER_EMAIL)
+      : "set OWNER_EMAIL in .env",
     imageStore: r2Ready()
-      ? 'Cloudflare R2 bucket ' + R2_BUCKET_NAME + (R2_PUBLIC_URL ? ' (public URL)' : ' (proxied via /api/images)')
-      : 'not configured - set the R2_* keys in .env',
+      ? "Cloudflare R2 bucket " +
+        R2_BUCKET_NAME +
+        (R2_PUBLIC_URL ? " (public URL)" : " (proxied via /api/images)")
+      : "not configured - set the R2_* keys in .env",
     maxImageKb: Math.round(MAX_IMAGE_BYTES / 1024),
-    bookingOtp: REQUIRE_BOOKING_OTP ? 'required' : 'off - one-step booking, email optional',
-  })
+    bookingOtp: REQUIRE_BOOKING_OTP
+      ? "required"
+      : "off - one-step booking, email optional",
+  }),
 );
 
-app.get('/api/available-dates', (_req, res) =>
+app.get("/api/available-dates", (_req, res) =>
   res.json({
     success: true,
     today: todayStr(),
-    dates: getAvailableDates().map((value) => ({ value, label: dateLabel(value) })),
-  })
+    dates: getAvailableDates().map((value) => ({
+      value,
+      label: dateLabel(value),
+    })),
+  }),
 );
 
 // Live "today's queue" snapshot for every clinic in one aggregation.
@@ -1021,17 +1355,50 @@ async function queueSnapshot(clinicIds) {
     { $match: { clinicId: { $in: clinicIds }, date } },
     {
       $group: {
-        _id: '$clinicId',
-        booked: { $sum: { $cond: [{ $ne: ['$status', 'cancelled'] }, 1, 0] } },
-        visited: { $sum: { $cond: [{ $eq: ['$status', 'visited'] }, 1, 0] } },
-        waiting: { $sum: { $cond: [{ $eq: ['$status', 'booked'] }, 1, 0] } },
-        nextToken: { $min: { $cond: [{ $eq: ['$status', 'booked'] }, '$bookingNumber', null] } },
+        _id: "$clinicId",
+        booked: { $sum: { $cond: [{ $ne: ["$status", "cancelled"] }, 1, 0] } },
+        visited: { $sum: { $cond: [{ $eq: ["$status", "visited"] }, 1, 0] } },
+        waiting: { $sum: { $cond: [{ $eq: ["$status", "booked"] }, 1, 0] } },
+        anchor: {
+          $max: {
+            $cond: [{ $eq: ["$status", "visited"] }, "$bookingNumber", 0],
+          },
+        },
+        waitingTokens: {
+          $push: {
+            $cond: [{ $eq: ["$status", "booked"] }, "$bookingNumber", null],
+          },
+        },
       },
     },
   ]);
   const map = {};
   for (const r of rows) {
-    map[r._id] = { booked: r.booked, visited: r.visited, waiting: r.waiting, nextToken: r.nextToken || null };
+    /* The directory card and the live board must never disagree about which
+       token is up next, so both use the same forward-only rule: the lowest
+       waiting token ABOVE the highest token already visited, falling back to
+       the lowest waiting token once nothing is left ahead. The old $min
+       ignored that anchor, so a clinic card could advertise a token the live
+       board had already passed - the same backwards jump patients reported. */
+    const waitingTokens = (r.waitingTokens || [])
+      .filter((t) => typeof t === "number")
+      .sort((a, b) => a - b);
+    const anchor = r.anchor || 0;
+    let nextToken = null;
+    for (const token of waitingTokens) {
+      if (token > anchor) {
+        nextToken = token;
+        break;
+      }
+    }
+    if (nextToken === null && waitingTokens.length)
+      nextToken = waitingTokens[0];
+    map[r._id] = {
+      booked: r.booked,
+      visited: r.visited,
+      waiting: r.waiting,
+      nextToken,
+    };
   }
   return map;
 }
@@ -1044,7 +1411,7 @@ const DEFAULT_CONSULT_MINUTES = 8;
 // emergency case out of order still reports the correct current patient.
 async function liveQueue(clinicId, date) {
   const rows = await Appointment.find({ clinicId, date })
-    .select('bookingNumber status quota source visitedAt updatedAt')
+    .select("bookingNumber status quota source visitedAt updatedAt")
     .sort({ bookingNumber: 1 })
     .lean();
 
@@ -1058,11 +1425,14 @@ async function liveQueue(clinicId, date) {
 
   for (const row of rows) {
     if (row.bookingNumber > maxToken) maxToken = row.bookingNumber;
-    if (row.status === 'visited') {
+    if (row.status === "visited") {
       visited += 1;
       if (row.bookingNumber > anchor) anchor = row.bookingNumber;
-      visits.push({ bookingNumber: row.bookingNumber, at: row.visitedAt || row.updatedAt || null });
-    } else if (row.status === 'cancelled') {
+      visits.push({
+        bookingNumber: row.bookingNumber,
+        at: row.visitedAt || row.updatedAt || null,
+      });
+    } else if (row.status === "cancelled") {
       cancelled += 1;
     } else {
       waiting += 1;
@@ -1088,12 +1458,17 @@ async function liveQueue(clinicId, date) {
 
   // Prefer timestamps; fall back to the highest visited token for rows created
   // before visitedAt existed, so older data still shows something sensible.
-  const stamped = visits.filter((v) => v.at).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const stamped = visits
+    .filter((v) => v.at)
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
   let current = null;
   if (stamped.length) {
     current = stamped[stamped.length - 1];
   } else if (visits.length) {
-    current = visits.slice().sort((a, b) => a.bookingNumber - b.bookingNumber).pop();
+    current = visits
+      .slice()
+      .sort((a, b) => a.bookingNumber - b.bookingNumber)
+      .pop();
   }
 
   // Pace = median gap between consecutive consultations. Median (not mean)
@@ -1104,13 +1479,15 @@ async function liveQueue(clinicId, date) {
   if (stamped.length >= 2) {
     const gaps = [];
     for (let i = 1; i < stamped.length; i += 1) {
-      const mins = (new Date(stamped[i].at) - new Date(stamped[i - 1].at)) / 60000;
+      const mins =
+        (new Date(stamped[i].at) - new Date(stamped[i - 1].at)) / 60000;
       if (mins > 0.2 && mins < 120) gaps.push(mins);
     }
     if (gaps.length) {
       gaps.sort((a, b) => a - b);
       const mid = Math.floor(gaps.length / 2);
-      const median = gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
+      const median =
+        gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
       paceMinutes = Math.max(2, Math.min(45, Math.round(median)));
       paceSamples = gaps.length;
     }
@@ -1121,7 +1498,8 @@ async function liveQueue(clinicId, date) {
     dateLabel: dateLabel(date),
     maxToken,
     currentToken: current ? current.bookingNumber : null,
-    lastVisitedAt: current && current.at ? new Date(current.at).toISOString() : null,
+    lastVisitedAt:
+      current && current.at ? new Date(current.at).toISOString() : null,
     nextToken,
     nextIsLeftover,
     anchorToken: anchor || null,
@@ -1147,7 +1525,7 @@ async function liveQueue(clinicId, date) {
 
 // One room per clinic per day, so a clinic only ever wakes up its own viewers.
 function queueRoom(clinicId, date) {
-  return 'queue:' + clinicId + ':' + date;
+  return "queue:" + clinicId + ":" + date;
 }
 
 // Pushes a fresh board to everyone watching this clinic/day. The payload is the
@@ -1158,77 +1536,116 @@ async function broadcastQueue(clinicId, date, reason) {
   if (!io || !clinicId || !date) return;
   try {
     const live = await liveQueue(clinicId, date);
-    io.to(queueRoom(clinicId, date)).emit('queue:update', {
+    io.to(queueRoom(clinicId, date)).emit("queue:update", {
       clinicId,
       date,
-      reason: reason || 'change',
+      reason: reason || "change",
       live,
     });
   } catch (error) {
-    console.error('[warn] Queue broadcast failed:', error.message);
+    console.error("[warn] Queue broadcast failed:", error.message);
   }
 }
 
 app.get(
-  '/api/clinics',
+  "/api/clinics",
   ah(async (req, res) => {
     const search = str(req.query.search);
     const specialization = str(req.query.specialization);
     const filter = directoryFilter();
-    if (specialization && specialization !== 'All') filter.specialization = specialization;
+    if (specialization && specialization !== "All")
+      filter.specialization = specialization;
     if (search) {
-      const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-      filter.$or = [{ clinicName: rx }, { doctorName: rx }, { specialization: rx }, { address: rx }, { city: rx }];
+      const rx = {
+        $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      };
+      filter.$or = [
+        { clinicName: rx },
+        { doctorName: rx },
+        { specialization: rx },
+        { address: rx },
+        { city: rx },
+      ];
     }
-    const clinics = await Clinic.find(filter).sort({ createdAt: -1 }).limit(200).lean();
+    const clinics = await Clinic.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
     const snapshot = await queueSnapshot(clinics.map((c) => c.clinicId));
     return res.json({
       success: true,
       count: clinics.length,
       clinics: clinics.map((c) =>
         Object.assign(publicClinic(c), {
-          todayQueue: snapshot[c.clinicId] || { booked: 0, visited: 0, waiting: 0, nextToken: null },
-        })
+          todayQueue: snapshot[c.clinicId] || {
+            booked: 0,
+            visited: 0,
+            waiting: 0,
+            nextToken: null,
+          },
+        }),
       ),
     });
-  })
+  }),
 );
 
 app.get(
-  '/api/clinics/specializations',
+  "/api/clinics/specializations",
   ah(async (_req, res) => {
-    const values = await Clinic.distinct('specialization', directoryFilter());
-    return res.json({ success: true, specializations: values.filter(Boolean).sort() });
-  })
+    const values = await Clinic.distinct("specialization", directoryFilter());
+    return res.json({
+      success: true,
+      specializations: values.filter(Boolean).sort(),
+    });
+  }),
 );
 
 app.get(
-  '/api/clinics/:clinicId',
+  "/api/clinics/:clinicId",
   ah(async (req, res) => {
-    const clinic = await Clinic.findOne(Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter())).lean();
-    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+    const clinic = await Clinic.findOne(
+      Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter()),
+    ).lean();
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "This clinic could not be found." });
     const snapshot = await queueSnapshot([clinic.clinicId]);
     return res.json({
       success: true,
       clinic: Object.assign(publicClinic(clinic), {
-        todayQueue: snapshot[clinic.clinicId] || { booked: 0, visited: 0, waiting: 0, nextToken: null },
+        todayQueue: snapshot[clinic.clinicId] || {
+          booked: 0,
+          visited: 0,
+          waiting: 0,
+          nextToken: null,
+        },
       }),
       today: todayStr(),
-      dates: getAvailableDates().map((value) => ({ value, label: dateLabel(value) })),
+      dates: getAvailableDates().map((value) => ({
+        value,
+        label: dateLabel(value),
+      })),
     });
-  })
+  }),
 );
 
 // Public live queue feed for the patient tracker. Deliberately carries no
 // patient details - only token numbers, statuses and pace - so it is safe to
 // poll without auth.
 app.get(
-  '/api/clinics/:clinicId/live',
+  "/api/clinics/:clinicId/live",
   ah(async (req, res) => {
-    const clinic = await Clinic.findOne(Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter())).lean();
-    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+    const clinic = await Clinic.findOne(
+      Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter()),
+    ).lean();
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "This clinic could not be found." });
 
-    const date = str(req.query.date) || todayStr();
+    const date = ymdOr(req.query.date, todayStr());
     const live = await liveQueue(clinic.clinicId, date);
 
     return res.json({
@@ -1244,26 +1661,42 @@ app.get(
       today: todayStr(),
       live,
     });
-  })
+  }),
 );
 
 // Patients have no accounts: a booking is looked up by mobile or booking ID.
 app.get(
-  '/api/lookup',
+  "/api/lookup",
   ah(async (req, res) => {
     const mobile = str(req.query.mobile);
     const bookingId = str(req.query.bookingId).toUpperCase();
     if (!mobile && !bookingId) {
-      return res.status(400).json({ success: false, message: 'Enter a 10-digit mobile number or a booking ID.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Enter a 10-digit mobile number or a booking ID.",
+        });
     }
     const query = bookingId ? { bookingId } : { mobile };
     if (mobile && !/^\d{10}$/.test(mobile)) {
-      return res.status(400).json({ success: false, message: 'Mobile number must be exactly 10 digits.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Mobile number must be exactly 10 digits.",
+        });
     }
-    const rows = await Appointment.find(query).sort({ date: -1, bookingNumber: -1 }).limit(25).lean();
-    if (!rows.length) return res.json({ success: true, count: 0, appointments: [] });
+    const rows = await Appointment.find(query)
+      .sort({ date: -1, bookingNumber: -1 })
+      .limit(25)
+      .lean();
+    if (!rows.length)
+      return res.json({ success: true, count: 0, appointments: [] });
 
-    const clinics = await Clinic.find({ clinicId: { $in: [...new Set(rows.map((r) => r.clinicId))] } }).lean();
+    const clinics = await Clinic.find({
+      clinicId: { $in: [...new Set(rows.map((r) => r.clinicId))] },
+    }).lean();
     const byId = {};
     for (const c of clinics) byId[c.clinicId] = c;
 
@@ -1280,12 +1713,12 @@ app.get(
         status: r.status,
         source: r.source,
         clinicId: r.clinicId,
-        clinicName: byId[r.clinicId] ? byId[r.clinicId].clinicName : 'Clinic',
-        doctorName: byId[r.clinicId] ? byId[r.clinicId].doctorName : '',
-        address: byId[r.clinicId] ? byId[r.clinicId].address : '',
+        clinicName: byId[r.clinicId] ? byId[r.clinicId].clinicName : "Clinic",
+        doctorName: byId[r.clinicId] ? byId[r.clinicId].doctorName : "",
+        address: byId[r.clinicId] ? byId[r.clinicId].address : "",
       })),
     });
-  })
+  }),
 );
 
 /* ----------------------------------------------------- clinic onboarding -- */
@@ -1300,17 +1733,21 @@ app.get(
 // adminUserId (lowercase) -> { data, otp, expires, attempts }
 const pendingRegistrations = new Map();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of pendingRegistrations) if (value.expires < now) pendingRegistrations.delete(key);
-}, 5 * 60 * 1000).unref();
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, value] of pendingRegistrations)
+      if (value.expires < now) pendingRegistrations.delete(key);
+  },
+  5 * 60 * 1000,
+).unref();
 
 // clinic@example.com -> cl***@example.com : safe to show in the browser.
 function maskEmail(value) {
   const email = str(value);
-  const at = email.indexOf('@');
+  const at = email.indexOf("@");
   if (at < 1) return email;
-  return email.slice(0, Math.min(2, at)) + '***' + email.slice(at);
+  return email.slice(0, Math.min(2, at)) + "***" + email.slice(at);
 }
 
 // Matches an admin user ID OR an admin email, case-insensitively.
@@ -1318,8 +1755,13 @@ function identifierQuery(raw) {
   const value = str(raw).trim();
   if (!value) return null;
   const lower = value.toLowerCase();
-  const exact = new RegExp('^' + lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
-  return { $or: [{ adminUserId: lower }, { adminEmail: lower }, { adminEmail: exact }] };
+  const exact = new RegExp(
+    "^" + lower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$",
+    "i",
+  );
+  return {
+    $or: [{ adminUserId: lower }, { adminEmail: lower }, { adminEmail: exact }],
+  };
 }
 
 function registerOtpEmail(pending, code) {
@@ -1335,55 +1777,55 @@ function registerOtpEmail(pending, code) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Verify your email address</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Use the code below to finish registering <b>${esc(
-        pseudoClinic.clinicName
+        pseudoClinic.clinicName,
       )}</b> on ${esc(BRAND)}. The clinic account is created only after this code is verified.</p>
       <div style="text-align:center;background:#f0fdfa;border:1px dashed #14b8a6;border-radius:12px;padding:22px;">
         <p style="margin:0 0 8px;color:#0f766e;font-size:12px;letter-spacing:1px;">EMAIL VERIFICATION CODE</p>
         <p style="margin:0;font-size:34px;font-weight:700;letter-spacing:10px;color:#0f766e;">${esc(code)}</p>
       </div>
       <table style="width:100%;border-collapse:collapse;margin-top:22px;">
-        ${row('Clinic', esc(pseudoClinic.clinicName))}
-        ${row('Doctor', esc(pseudoClinic.doctorName))}
-        ${row('Admin user ID', esc(str(pending.adminUserId).toLowerCase()), true)}
+        ${row("Clinic", esc(pseudoClinic.clinicName))}
+        ${row("Doctor", esc(pseudoClinic.doctorName))}
+        ${row("Admin user ID", esc(str(pending.adminUserId).toLowerCase()), true)}
       </table>
       <p style="margin:18px 0 0;color:#b45309;font-size:13px;">This code expires in 10 minutes. If you did not start this registration, please ignore this email.</p>
-    </div>`
+    </div>`,
   );
 }
 
 /* Owner-facing emails are branded for the platform, not for one clinic, so they
    reuse the same shell() with a platform pseudo-clinic. */
 const OWNER_BRAND = {
-  clinicName: BRAND + ' - Master Admin',
-  doctorName: 'Listing approvals',
-  specialization: 'Owner console',
-  address: 'Automated owner notification',
-  phone: 'n/a',
+  clinicName: BRAND + " - Master Admin",
+  doctorName: "Listing approvals",
+  specialization: "Owner console",
+  address: "Automated owner notification",
+  phone: "n/a",
 };
 
 function listingRequestEmail(clinic) {
-  const link = SITE_URL ? SITE_URL + '/#/owner' : 'your master admin panel';
+  const link = SITE_URL ? SITE_URL + "/#/owner" : "your master admin panel";
   return shell(
     OWNER_BRAND,
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">New listing request</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Approve request of <b>${esc(
-        clinic.doctorName
+        clinic.doctorName,
       )}</b> for <b>${esc(clinic.clinicName)}</b>. The clinic is registered and email-verified, but stays off the public
       directory until you approve it.</p>
       <table style="width:100%;border-collapse:collapse;">
-        ${row('Clinic', esc(clinic.clinicName))}
-        ${row('Doctor', esc(clinic.doctorName), true)}
-        ${row('Specialization', esc(clinic.specialization))}
-        ${row('Address', esc([clinic.address, clinic.city].filter(Boolean).join(', ')))}
-        ${row('Clinic phone', esc(clinic.phone))}
-        ${row('Admin email', esc(clinic.adminEmail))}
-        ${row('Admin user ID', esc(clinic.adminUserId))}
+        ${row("Clinic", esc(clinic.clinicName))}
+        ${row("Doctor", esc(clinic.doctorName), true)}
+        ${row("Specialization", esc(clinic.specialization))}
+        ${row("Address", esc([clinic.address, clinic.city].filter(Boolean).join(", ")))}
+        ${row("Clinic phone", esc(clinic.phone))}
+        ${row("Admin email", esc(clinic.adminEmail))}
+        ${row("Admin user ID", esc(clinic.adminUserId))}
       </table>
       <p style="margin:20px 0 0;color:#475569;font-size:13px;line-height:1.7;">Open ${esc(
-        link
+        link,
       )} and use the Approval requests section to approve or reject this listing.</p>
-    </div>`
+    </div>`,
   );
 }
 
@@ -1393,19 +1835,19 @@ function listingSubmittedEmail(clinic) {
     `<div style="padding:30px;">
       <h3 style="margin:0 0 6px;color:#0f766e;font-size:19px;">Listing request received</h3>
       <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.7;">Thank you for registering <b>${esc(
-        clinic.clinicName
+        clinic.clinicName,
       )}</b> on ${esc(BRAND)}. Your admin account is ready, but the public listing is held for a short review.</p>
       <table style="width:100%;border-collapse:collapse;">
-        ${row('Clinic', esc(clinic.clinicName))}
-        ${row('Doctor', esc(clinic.doctorName))}
-        ${row('Admin user ID', esc(clinic.adminUserId), true)}
-        ${row('Status', 'Awaiting approval')}
+        ${row("Clinic", esc(clinic.clinicName))}
+        ${row("Doctor", esc(clinic.doctorName))}
+        ${row("Admin user ID", esc(clinic.adminUserId), true)}
+        ${row("Status", "Awaiting approval")}
       </table>
       <p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.7;">You can sign in to your dashboard right
       now and get set up. The moment we approve the listing, your clinic appears on the ${esc(
-        BRAND
+        BRAND,
       )} homepage and starts accepting online bookings - we will email you straight away.</p>
-    </div>`
+    </div>`,
   );
 }
 
@@ -1422,74 +1864,106 @@ function listingRejectedEmail(clinic, note) {
                <p style="margin:0 0 6px;color:#92400e;font-size:12px;letter-spacing:1px;">REASON</p>
                <p style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${esc(note)}</p>
              </div>`
-          : ''
+          : ""
       }
       <p style="margin:0;color:#475569;font-size:13px;line-height:1.7;">Your admin account still works, so you can sign
       in, correct your details and reply to this address to ask for another review.</p>
-    </div>`
+    </div>`,
   );
 }
 
 function notifyOwnerOfRequest(clinic) {
   if (!OWNER_EMAIL) {
-    console.warn('[warn] OWNER_EMAIL is not set - no approval alert sent for ' + clinic.clinicName + '.');
+    console.warn(
+      "[warn] OWNER_EMAIL is not set - no approval alert sent for " +
+        clinic.clinicName +
+        ".",
+    );
     return;
   }
   sendEmail({
     to: OWNER_EMAIL,
-    subject: 'Approve request of ' + clinic.doctorName + ' (' + clinic.clinicName + ')',
+    subject:
+      "Approve request of " +
+      clinic.doctorName +
+      " (" +
+      clinic.clinicName +
+      ")",
     html: listingRequestEmail(clinic),
   }).catch(() => {});
 }
 
 app.post(
-  '/api/auth/register/send-otp',
+  "/api/auth/register/send-otp",
   ah(async (req, res) => {
     const body = req.body || {};
     const problem = validateRegistration(body);
-    if (problem) return res.status(400).json({ success: false, message: problem });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
 
     const wantedId = str(body.adminUserId).toLowerCase();
     if (await Clinic.exists({ adminUserId: wantedId })) {
-      return res.status(409).json({ success: false, message: 'That admin user ID is already taken. Please choose another.' });
+      return res
+        .status(409)
+        .json({
+          success: false,
+          message:
+            "That admin user ID is already taken. Please choose another.",
+        });
     }
-    if (await Clinic.exists(identifierQuery(body.adminEmail) || { _id: null })) {
+    if (
+      await Clinic.exists(identifierQuery(body.adminEmail) || { _id: null })
+    ) {
       return res.status(409).json({
         success: false,
-        message: 'That admin email is already registered. Sign in instead, or use "Forgot password".',
+        message:
+          'That admin email is already registered. Sign in instead, or use "Forgot password".',
       });
     }
 
     const code = sixDigits();
     const sent = await sendEmail({
       to: str(body.adminEmail),
-      subject: 'Verify your email - ' + str(body.clinicName) + ' on ' + BRAND,
+      subject: "Verify your email - " + str(body.clinicName) + " on " + BRAND,
       html: registerOtpEmail(body, code),
     });
     if (!sent) {
       return res.status(502).json({
         success: false,
         message:
-          'The verification email could not be sent (' +
-          (mailer.lastError || 'mailer error') +
-          '). Fix GOOGLE_SCRIPT_URL in the backend .env file and try again.',
+          "The verification email could not be sent (" +
+          (mailer.lastError || "mailer error") +
+          "). Fix GOOGLE_SCRIPT_URL in the backend .env file and try again.",
       });
     }
 
-    pendingRegistrations.set(wantedId, { data: body, otp: code, expires: Date.now() + OTP_TTL_MS, attempts: 0 });
-    console.log('[register] Verification code sent to ' + str(body.adminEmail) + ' for ' + wantedId);
+    pendingRegistrations.set(wantedId, {
+      data: body,
+      otp: code,
+      expires: Date.now() + OTP_TTL_MS,
+      attempts: 0,
+    });
+    console.log(
+      "[register] Verification code sent to " +
+        str(body.adminEmail) +
+        " for " +
+        wantedId,
+    );
 
     return res.json({
       success: true,
-      message: 'A 6-digit verification code has been emailed to ' + maskEmail(body.adminEmail) + '.',
+      message:
+        "A 6-digit verification code has been emailed to " +
+        maskEmail(body.adminEmail) +
+        ".",
       sentTo: maskEmail(body.adminEmail),
       expiresInMinutes: Math.round(OTP_TTL_MS / 60000),
     });
-  })
+  }),
 );
 
 app.post(
-  '/api/auth/register/verify',
+  "/api/auth/register/verify",
   ah(async (req, res) => {
     const adminUserId = str((req.body || {}).adminUserId).toLowerCase();
     const otp = str((req.body || {}).otp);
@@ -1499,28 +1973,48 @@ app.post(
       pendingRegistrations.delete(adminUserId);
       return res.status(400).json({
         success: false,
-        message: 'That verification code has expired. Go back, check your details and request a new code.',
+        message:
+          "That verification code has expired. Go back, check your details and request a new code.",
       });
     }
     if (pending.attempts >= 5) {
       pendingRegistrations.delete(adminUserId);
-      return res.status(429).json({ success: false, message: 'Too many incorrect codes. Please start the registration again.' });
+      return res
+        .status(429)
+        .json({
+          success: false,
+          message:
+            "Too many incorrect codes. Please start the registration again.",
+        });
     }
     if (pending.otp !== otp) {
       pending.attempts += 1;
       pendingRegistrations.set(adminUserId, pending);
-      return res.status(400).json({ success: false, message: 'Incorrect code. ' + (5 - pending.attempts) + ' attempt(s) left.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "Incorrect code. " + (5 - pending.attempts) + " attempt(s) left.",
+        });
     }
 
     const body = pending.data;
     pendingRegistrations.delete(adminUserId);
 
     if (await Clinic.exists({ adminUserId })) {
-      return res.status(409).json({ success: false, message: 'That admin user ID is already taken. Please choose another.' });
+      return res
+        .status(409)
+        .json({
+          success: false,
+          message:
+            "That admin user ID is already taken. Please choose another.",
+        });
     }
 
-    let clinicId = slugify(body.clinicName) || 'clinic';
-    if (await Clinic.exists({ clinicId })) clinicId = clinicId + '-' + crypto.randomBytes(2).toString('hex');
+    let clinicId = slugify(body.clinicName) || "clinic";
+    if (await Clinic.exists({ clinicId }))
+      clinicId = clinicId + "-" + crypto.randomBytes(2).toString("hex");
 
     const clinic = await Clinic.create({
       clinicId,
@@ -1542,7 +2036,7 @@ app.post(
     // The clinic is created as PENDING (schema default) - not listed yet.
     sendEmail({
       to: clinic.adminEmail,
-      subject: 'Listing request received - ' + BRAND,
+      subject: "Listing request received - " + BRAND,
       html: listingSubmittedEmail(clinic),
     }).catch(() => {});
 
@@ -1550,100 +2044,140 @@ app.post(
 
     return res.status(201).json({
       success: true,
-      message: clinic.clinicName + ' is registered. Your listing is now awaiting owner approval.',
+      message:
+        clinic.clinicName +
+        " is registered. Your listing is now awaiting owner approval.",
       token: signToken(clinic),
       clinic: adminClinic(clinic),
     });
-  })
+  }),
 );
 
 app.post(
-  '/api/auth/login',
+  "/api/auth/login",
   ah(async (req, res) => {
     const adminUserId = str((req.body || {}).adminUserId).toLowerCase();
     const password = str((req.body || {}).password);
     if (!adminUserId || !password) {
-      return res.status(400).json({ success: false, message: 'Enter your user ID and password.' });
+      return res
+        .status(400)
+        .json({ success: false, message: "Enter your user ID and password." });
     }
     const clinic = await Clinic.findOne({ adminUserId });
     const ok = clinic && (await bcrypt.compare(password, clinic.passwordHash));
-    if (!ok) return res.status(401).json({ success: false, message: 'Incorrect user ID or password.' });
-    if (!clinic.active) return res.status(403).json({ success: false, message: 'This clinic account is disabled.' });
+    if (!ok)
+      return res
+        .status(401)
+        .json({ success: false, message: "Incorrect user ID or password." });
+    if (!clinic.active)
+      return res
+        .status(403)
+        .json({ success: false, message: "This clinic account is disabled." });
 
     return res.json({
       success: true,
-      message: 'Welcome back, ' + clinic.clinicName + '.',
+      message: "Welcome back, " + clinic.clinicName + ".",
       token: signToken(clinic),
       clinic: adminClinic(clinic),
     });
-  })
+  }),
 );
 
 app.get(
-  '/api/auth/me',
+  "/api/auth/me",
   clinicAuth,
   ah(async (req, res) => {
     const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
-    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
     return res.json({ success: true, clinic: adminClinic(clinic) });
-  })
+  }),
 );
 
 /* Mailer diagnostics: open http://localhost:5000/api/health/mailer whenever a  */
 /* code does not arrive - it reports the exact reason the last send failed.     */
-app.get('/api/health/mailer', (_req, res) =>
+app.get("/api/health/mailer", (_req, res) =>
   res.json({
     success: true,
     scriptUrlConfigured: Boolean(GOOGLE_SCRIPT_URL),
     sent: mailer.sent,
     failed: mailer.failed,
     lastOkAt: mailer.lastOkAt,
-    lastTo: mailer.lastTo ? maskEmail(mailer.lastTo) : '',
+    lastTo: mailer.lastTo ? maskEmail(mailer.lastTo) : "",
     lastError: mailer.lastError,
-  })
+  }),
 );
 
 app.post(
-  '/api/admin/test-email',
+  "/api/admin/test-email",
   clinicAuth,
   ah(async (req, res) => {
     const clinic = await Clinic.findOne({ clinicId: req.clinicId });
-    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
     const sent = await sendEmail({
       to: clinic.adminEmail,
-      subject: 'Test email from ' + BRAND,
+      subject: "Test email from " + BRAND,
       html: shell(
         clinic,
         '<div style="padding:30px;"><h3 style="margin:0 0 6px;color:#059669;font-size:19px;">Your mailer works</h3>' +
-          '<p style="margin:0;color:#475569;font-size:14px;line-height:1.7;">If you can read this, the Google Apps Script mailer is wired up correctly, so registration codes, OTPs, confirmations and password-reset codes will all reach this inbox.</p></div>'
+          '<p style="margin:0;color:#475569;font-size:14px;line-height:1.7;">If you can read this, the Google Apps Script mailer is wired up correctly, so registration codes, OTPs, confirmations and password-reset codes will all reach this inbox.</p></div>',
       ),
     });
-    if (!sent) return res.status(502).json({ success: false, message: 'Send failed: ' + (mailer.lastError || 'unknown error') });
-    return res.json({ success: true, message: 'Test email sent to ' + maskEmail(clinic.adminEmail) + '.' });
-  })
+    if (!sent)
+      return res
+        .status(502)
+        .json({
+          success: false,
+          message: "Send failed: " + (mailer.lastError || "unknown error"),
+        });
+    return res.json({
+      success: true,
+      message: "Test email sent to " + maskEmail(clinic.adminEmail) + ".",
+    });
+  }),
 );
 
 /* Accepts the admin user ID OR the registered admin email. The old version   */
 /* matched adminUserId only and replied with a generic success when nothing    */
 /* matched, so entering the email produced a fake "code sent" and no email.   */
 app.post(
-  '/api/auth/forgot-password',
+  "/api/auth/forgot-password",
   ah(async (req, res) => {
     const body = req.body || {};
-    const query = identifierQuery(body.identifier || body.adminUserId || body.adminEmail);
+    const query = identifierQuery(
+      body.identifier || body.adminUserId || body.adminEmail,
+    );
     if (!query) {
-      return res.status(400).json({ success: false, message: 'Enter your admin user ID or the admin email you registered with.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "Enter your admin user ID or the admin email you registered with.",
+        });
     }
 
     const clinic = await Clinic.findOne(query);
     if (!clinic) {
       return res.status(404).json({
         success: false,
-        message: 'No clinic admin account matches that user ID or email. Check the spelling, or register your clinic first.',
+        message:
+          "No clinic admin account matches that user ID or email. Check the spelling, or register your clinic first.",
       });
     }
     if (!clinic.adminEmail) {
-      return res.status(400).json({ success: false, message: 'This clinic has no admin email on file, so a reset code cannot be emailed.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "This clinic has no admin email on file, so a reset code cannot be emailed.",
+        });
     }
 
     const code = sixDigits();
@@ -1653,44 +2187,61 @@ app.post(
 
     const sent = await sendEmail({
       to: clinic.adminEmail,
-      subject: 'Password reset code - ' + clinic.clinicName,
+      subject: "Password reset code - " + clinic.clinicName,
       html: resetEmail(clinic, code),
     });
     if (!sent) {
       return res.status(502).json({
         success: false,
         message:
-          'The reset email could not be sent (' +
-          (mailer.lastError || 'mailer error') +
-          '). Check GOOGLE_SCRIPT_URL in the backend .env file.',
+          "The reset email could not be sent (" +
+          (mailer.lastError || "mailer error") +
+          "). Check GOOGLE_SCRIPT_URL in the backend .env file.",
       });
     }
-    console.log('[reset] Code emailed to ' + clinic.adminEmail + ' for ' + clinic.adminUserId);
+    console.log(
+      "[reset] Code emailed to " +
+        clinic.adminEmail +
+        " for " +
+        clinic.adminUserId,
+    );
 
     return res.json({
       success: true,
-      message: 'A 6-digit reset code has been emailed to ' + maskEmail(clinic.adminEmail) + '.',
+      message:
+        "A 6-digit reset code has been emailed to " +
+        maskEmail(clinic.adminEmail) +
+        ".",
       sentTo: maskEmail(clinic.adminEmail),
       expiresInMinutes: Math.round(RESET_TTL_MS / 60000),
     });
-  })
+  }),
 );
 
 app.post(
-  '/api/auth/reset-password',
+  "/api/auth/reset-password",
   ah(async (req, res) => {
     const body = req.body || {};
-    const query = identifierQuery(body.identifier || body.adminUserId || body.adminEmail);
+    const query = identifierQuery(
+      body.identifier || body.adminUserId || body.adminEmail,
+    );
     const code = str(body.code);
     const password = str(body.password);
 
     if (!query || !code || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Admin user ID (or admin email), the reset code and a new password are all required.',
+        message:
+          "Admin user ID (or admin email), the reset code and a new password are all required.",
       });
     }
-    if (password.length < 6) return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+    if (password.length < 6)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "New password must be at least 6 characters.",
+        });
 
     const clinic = await Clinic.findOne(query);
     const valid =
@@ -1700,15 +2251,27 @@ app.post(
       clinic.resetExpires.getTime() > Date.now() &&
       (await bcrypt.compare(code, clinic.resetCodeHash));
 
-    if (!valid) return res.status(400).json({ success: false, message: 'That reset code is invalid or has expired. Request a new one.' });
+    if (!valid)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "That reset code is invalid or has expired. Request a new one.",
+        });
 
     clinic.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    clinic.resetCodeHash = '';
+    clinic.resetCodeHash = "";
     clinic.resetExpires = null;
     await clinic.save();
 
-    return res.json({ success: true, message: 'Password updated. You can sign in now.', token: signToken(clinic), clinic: adminClinic(clinic) });
-  })
+    return res.json({
+      success: true,
+      message: "Password updated. You can sign in now.",
+      token: signToken(clinic),
+      clinic: adminClinic(clinic),
+    });
+  }),
 );
 
 /* ----------------------------------------------------------------- booking -- */
@@ -1722,70 +2285,96 @@ app.post(
    The two OTP routes below are deliberately kept, not deleted: flip
    REQUIRE_BOOKING_OTP=true in .env and this route hands back to them. */
 app.post(
-  '/api/booking/create',
+  "/api/booking/create",
   ah(async (req, res) => {
     const body = req.body || {};
     const clinicId = str(body.clinicId);
     const form = body.form || body.formData || {};
 
-    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
-    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+    const clinic = await Clinic.findOne(
+      Object.assign({ clinicId }, bookableFilter()),
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "This clinic could not be found." });
 
-    const problem = validateAppointmentForm(form, { requireEmail: REQUIRE_BOOKING_OTP });
-    if (problem) return res.status(400).json({ success: false, message: problem });
+    const problem = validateAppointmentForm(form, {
+      requireEmail: REQUIRE_BOOKING_OTP,
+    });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
 
     const duplicate = await Appointment.findOne({
       clinicId,
       date: str(form.date),
       mobile: str(form.mobile),
-      status: { $ne: 'cancelled' },
+      status: { $ne: "cancelled" },
     }).lean();
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: 'This mobile number already has appointment #' + duplicate.bookingNumber + ' on that date at this clinic.',
+        message:
+          "This mobile number already has appointment #" +
+          duplicate.bookingNumber +
+          " on that date at this clinic.",
       });
     }
 
     /* Flag on -> fall back to the two-step OTP flow. */
     if (REQUIRE_BOOKING_OTP) {
       const otp = sixDigits();
-      const pending = normalizeForm(form, 'online');
-      otpStore.set(otpKey(clinicId, form.email), { otp, form: pending, expires: Date.now() + OTP_TTL_MS, attempts: 0 });
+      const pending = normalizeForm(form, "online");
+      otpStore.set(otpKey(clinicId, form.email), {
+        otp,
+        form: pending,
+        expires: Date.now() + OTP_TTL_MS,
+        attempts: 0,
+      });
       const sent = await sendEmail({
         to: str(form.email),
-        subject: 'OTP ' + otp + ' - verify your appointment at ' + clinic.clinicName,
+        subject:
+          "OTP " + otp + " - verify your appointment at " + clinic.clinicName,
         html: otpEmail(clinic, pending, otp),
       });
       if (!sent) {
         otpStore.delete(otpKey(clinicId, form.email));
-        return res.status(502).json({ success: false, message: 'We could not send the OTP email. Please try again.' });
+        return res
+          .status(502)
+          .json({
+            success: false,
+            message: "We could not send the OTP email. Please try again.",
+          });
       }
       return res.json({
         success: true,
         otpRequired: true,
-        message: 'A 6-digit OTP has been sent to ' + str(form.email) + '.',
+        message: "A 6-digit OTP has been sent to " + str(form.email) + ".",
         expiresInMinutes: Math.round(OTP_TTL_MS / 60000),
       });
     }
 
-    const appointment = await createAppointment(clinicId, form, 'online');
+    const appointment = await createAppointment(clinicId, form, "online");
 
     // Optional email: only mail the patient when an address was actually given.
     if (appointment.email) {
       sendEmail({
         to: appointment.email,
-        subject: 'Appointment confirmed - queue #' + appointment.bookingNumber + ' at ' + clinic.clinicName,
+        subject:
+          "Appointment confirmed - queue #" +
+          appointment.bookingNumber +
+          " at " +
+          clinic.clinicName,
         html: confirmEmail(clinic, appointment),
       }).catch(() => {});
     }
 
-    broadcastQueue(clinicId, appointment.date, 'new-booking').catch(() => {});
+    broadcastQueue(clinicId, appointment.date, "new-booking").catch(() => {});
 
     return res.status(201).json({
       success: true,
       otpRequired: false,
-      message: 'Appointment booked successfully.',
+      message: "Appointment booked successfully.",
       appointment: {
         bookingId: appointment.bookingId,
         bookingNumber: appointment.bookingNumber,
@@ -1800,65 +2389,80 @@ app.post(
       },
       clinic: publicClinic(clinic),
     });
-  })
+  }),
 );
 
 /* ---- kept for REQUIRE_BOOKING_OTP=true, and for the Resend code button ---- */
 
 app.post(
-  '/api/booking/send-otp',
+  "/api/booking/send-otp",
   ah(async (req, res) => {
     const body = req.body || {};
     const clinicId = str(body.clinicId);
     const form = body.form || body.formData || {};
 
-    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
-    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+    const clinic = await Clinic.findOne(
+      Object.assign({ clinicId }, bookableFilter()),
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "This clinic could not be found." });
 
     const problem = validateAppointmentForm(form, { requireEmail: true });
-    if (problem) return res.status(400).json({ success: false, message: problem });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
 
     const duplicate = await Appointment.findOne({
       clinicId,
       date: str(form.date),
       mobile: str(form.mobile),
-      status: { $ne: 'cancelled' },
+      status: { $ne: "cancelled" },
     }).lean();
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: 'This mobile number already has appointment #' + duplicate.bookingNumber + ' on that date at this clinic.',
+        message:
+          "This mobile number already has appointment #" +
+          duplicate.bookingNumber +
+          " on that date at this clinic.",
       });
     }
 
     const otp = sixDigits();
     otpStore.set(otpKey(clinicId, form.email), {
       otp,
-      form: normalizeForm(form, 'online'),
+      form: normalizeForm(form, "online"),
       expires: Date.now() + OTP_TTL_MS,
       attempts: 0,
     });
 
     const sent = await sendEmail({
       to: str(form.email),
-      subject: 'OTP ' + otp + ' - verify your appointment at ' + clinic.clinicName,
-      html: otpEmail(clinic, normalizeForm(form, 'online'), otp),
+      subject:
+        "OTP " + otp + " - verify your appointment at " + clinic.clinicName,
+      html: otpEmail(clinic, normalizeForm(form, "online"), otp),
     });
 
     if (!sent) {
       otpStore.delete(otpKey(clinicId, form.email));
       return res.status(502).json({
         success: false,
-        message: 'We could not send the OTP email. Check GOOGLE_SCRIPT_URL in the backend .env file and try again.',
+        message:
+          "We could not send the OTP email. Check GOOGLE_SCRIPT_URL in the backend .env file and try again.",
       });
     }
 
-    return res.json({ success: true, message: 'A 6-digit OTP has been sent to ' + str(form.email) + '.', expiresInMinutes: 10 });
-  })
+    return res.json({
+      success: true,
+      message: "A 6-digit OTP has been sent to " + str(form.email) + ".",
+      expiresInMinutes: 10,
+    });
+  }),
 );
 
 app.post(
-  '/api/booking/verify',
+  "/api/booking/verify",
   ah(async (req, res) => {
     const body = req.body || {};
     const clinicId = str(body.clinicId);
@@ -1870,35 +2474,64 @@ app.post(
 
     if (!pending || pending.expires < Date.now()) {
       otpStore.delete(key);
-      return res.status(400).json({ success: false, message: 'That OTP has expired. Please request a new one.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "That OTP has expired. Please request a new one.",
+        });
     }
     if (pending.attempts >= 5) {
       otpStore.delete(key);
-      return res.status(429).json({ success: false, message: 'Too many incorrect attempts. Please request a new OTP.' });
+      return res
+        .status(429)
+        .json({
+          success: false,
+          message: "Too many incorrect attempts. Please request a new OTP.",
+        });
     }
     if (pending.otp !== otp) {
       pending.attempts += 1;
       otpStore.set(key, pending);
-      return res.status(400).json({ success: false, message: 'Incorrect OTP. ' + (5 - pending.attempts) + ' attempt(s) left.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "Incorrect OTP. " + (5 - pending.attempts) + " attempt(s) left.",
+        });
     }
 
-    const clinic = await Clinic.findOne(Object.assign({ clinicId }, bookableFilter()));
-    if (!clinic) return res.status(404).json({ success: false, message: 'This clinic could not be found.' });
+    const clinic = await Clinic.findOne(
+      Object.assign({ clinicId }, bookableFilter()),
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "This clinic could not be found." });
 
     otpStore.delete(key);
-    const appointment = await createAppointment(clinicId, pending.form, 'online');
+    const appointment = await createAppointment(
+      clinicId,
+      pending.form,
+      "online",
+    );
 
     sendEmail({
       to: appointment.email,
-      subject: 'Appointment confirmed - queue #' + appointment.bookingNumber + ' at ' + clinic.clinicName,
+      subject:
+        "Appointment confirmed - queue #" +
+        appointment.bookingNumber +
+        " at " +
+        clinic.clinicName,
       html: confirmEmail(clinic, appointment),
     }).catch(() => {});
 
-    broadcastQueue(clinicId, appointment.date, 'new-booking').catch(() => {});
+    broadcastQueue(clinicId, appointment.date, "new-booking").catch(() => {});
 
     return res.json({
       success: true,
-      message: 'Appointment booked successfully.',
+      message: "Appointment booked successfully.",
       appointment: {
         bookingId: appointment.bookingId,
         bookingNumber: appointment.bookingNumber,
@@ -1913,7 +2546,7 @@ app.post(
       },
       clinic: publicClinic(clinic),
     });
-  })
+  }),
 );
 
 /* ------------------------------------------- admin dashboard (per clinic) -- */
@@ -1921,20 +2554,40 @@ app.post(
 /* verified JWT. A clinic can never read or write another clinic's data.       */
 
 app.get(
-  '/api/admin/stats',
+  "/api/admin/stats",
   clinicAuth,
   ah(async (req, res) => {
-    const date = str(req.query.date) || todayStr();
+    const date = ymdOr(req.query.date, todayStr());
     const base = { clinicId: req.clinicId, date };
 
-    const [total, visited, cancelled, emergency, walkIns, nextRow] = await Promise.all([
-      Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' } })),
-      Appointment.countDocuments(Object.assign({}, base, { status: 'visited' })),
-      Appointment.countDocuments(Object.assign({}, base, { status: 'cancelled' })),
-      Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' }, quota: 'Emergency' })),
-      Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' }, source: 'walk-in' })),
-      Appointment.find(Object.assign({}, base, { status: 'booked' })).sort({ bookingNumber: 1 }).limit(1).lean(),
-    ]);
+    const [total, visited, cancelled, emergency, walkIns, nextRow] =
+      await Promise.all([
+        Appointment.countDocuments(
+          Object.assign({}, base, { status: { $ne: "cancelled" } }),
+        ),
+        Appointment.countDocuments(
+          Object.assign({}, base, { status: "visited" }),
+        ),
+        Appointment.countDocuments(
+          Object.assign({}, base, { status: "cancelled" }),
+        ),
+        Appointment.countDocuments(
+          Object.assign({}, base, {
+            status: { $ne: "cancelled" },
+            quota: "Emergency",
+          }),
+        ),
+        Appointment.countDocuments(
+          Object.assign({}, base, {
+            status: { $ne: "cancelled" },
+            source: "walk-in",
+          }),
+        ),
+        Appointment.find(Object.assign({}, base, { status: "booked" }))
+          .sort({ bookingNumber: 1 })
+          .limit(1)
+          .lean(),
+      ]);
 
     return res.json({
       success: true,
@@ -1948,11 +2601,11 @@ app.get(
       walkIns,
       nextToken: nextRow.length ? nextRow[0].bookingNumber : null,
     });
-  })
+  }),
 );
 
 app.get(
-  '/api/admin/analytics',
+  "/api/admin/analytics",
   clinicAuth,
   ah(async (req, res) => {
     const startDate = str(req.query.startDate);
@@ -1964,28 +2617,65 @@ app.get(
       if (endDate) base.date.$lte = endDate;
     }
 
-    const [total, visited, cancelled, visitedGeneral, visitedEmergency, remainingGeneral, remainingEmergency, walkIns, online] =
-      await Promise.all([
-        Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' } })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'visited' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'cancelled' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'visited', quota: 'General' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'visited', quota: 'Emergency' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'booked', quota: 'General' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: 'booked', quota: 'Emergency' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' }, source: 'walk-in' })),
-        Appointment.countDocuments(Object.assign({}, base, { status: { $ne: 'cancelled' }, source: 'online' })),
-      ]);
+    const [
+      total,
+      visited,
+      cancelled,
+      visitedGeneral,
+      visitedEmergency,
+      remainingGeneral,
+      remainingEmergency,
+      walkIns,
+      online,
+    ] = await Promise.all([
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: { $ne: "cancelled" } }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "visited" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "cancelled" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "visited", quota: "General" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "visited", quota: "Emergency" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "booked", quota: "General" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, { status: "booked", quota: "Emergency" }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, {
+          status: { $ne: "cancelled" },
+          source: "walk-in",
+        }),
+      ),
+      Appointment.countDocuments(
+        Object.assign({}, base, {
+          status: { $ne: "cancelled" },
+          source: "online",
+        }),
+      ),
+    ]);
 
     const trendRows = await Appointment.aggregate([
       { $match: base },
       {
         $group: {
-          _id: '$date',
-          total: { $sum: { $cond: [{ $ne: ['$status', 'cancelled'] }, 1, 0] } },
-          visited: { $sum: { $cond: [{ $eq: ['$status', 'visited'] }, 1, 0] } },
-          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          emergency: { $sum: { $cond: [{ $eq: ['$quota', 'Emergency'] }, 1, 0] } },
+          _id: "$date",
+          total: { $sum: { $cond: [{ $ne: ["$status", "cancelled"] }, 1, 0] } },
+          visited: { $sum: { $cond: [{ $eq: ["$status", "visited"] }, 1, 0] } },
+          cancelled: {
+            $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] },
+          },
+          emergency: {
+            $sum: { $cond: [{ $eq: ["$quota", "Emergency"] }, 1, 0] },
+          },
         },
       },
       { $sort: { _id: 1 } },
@@ -2014,14 +2704,15 @@ app.get(
         emergency: r.emergency,
       })),
     });
-  })
+  }),
 );
 
 app.get(
-  '/api/admin/appointments',
+  "/api/admin/appointments",
   clinicAuth,
   ah(async (req, res) => {
-    const { date, startDate, endDate, search, status, quota, source } = req.query;
+    const { date, startDate, endDate, search, status, quota, source } =
+      req.query;
     const query = { clinicId: req.clinicId };
 
     if (str(date)) query.date = str(date);
@@ -2031,44 +2722,70 @@ app.get(
       if (str(endDate)) query.date.$lte = str(endDate);
     }
 
-    if (str(status)) query.status = str(status) === 'active' ? { $ne: 'cancelled' } : str(status);
+    if (str(status))
+      query.status =
+        str(status) === "active" ? { $ne: "cancelled" } : str(status);
     if (str(quota)) query.quota = str(quota);
     if (str(source)) query.source = str(source);
 
     if (str(search)) {
-      const rx = { $regex: str(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-      query.$or = [{ name: rx }, { email: rx }, { mobile: rx }, { bookingId: rx }];
+      const rx = {
+        $regex: str(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      };
+      query.$or = [
+        { name: rx },
+        { email: rx },
+        { mobile: rx },
+        { bookingId: rx },
+      ];
     }
 
-    const appointments = await Appointment.find(query).sort({ date: -1, bookingNumber: 1 }).limit(500).lean();
+    const appointments = await Appointment.find(query)
+      .sort({ date: -1, bookingNumber: 1 })
+      .limit(500)
+      .lean();
 
     return res.json({
       success: true,
       count: appointments.length,
-      appointments: appointments.map((a) => Object.assign({}, a, { dateLabel: dateLabel(a.date) })),
+      appointments: appointments.map((a) =>
+        Object.assign({}, a, { dateLabel: dateLabel(a.date) }),
+      ),
     });
-  })
+  }),
 );
 
 async function setStatus(req, res, status) {
   const id = str(req.params.id);
-  if (!mongoose.isValidObjectId(id)) return res.status(400).json({ success: false, message: 'Invalid appointment id.' });
+  if (!mongoose.isValidObjectId(id))
+    return res
+      .status(400)
+      .json({ success: false, message: "Invalid appointment id." });
 
   const appointment = await Appointment.findOneAndUpdate(
     { _id: id, clinicId: req.clinicId }, // clinic scope enforced here
     // Stamp the visit time so the live queue knows who is being seen now, and
     // clear it on revert/cancel so a stale timestamp cannot win "now serving".
-    status === 'visited' ? { status, visitedAt: new Date() } : { status, visitedAt: null },
-    { new: true }
+    status === "visited"
+      ? { status, visitedAt: new Date() }
+      : { status, visitedAt: null },
+    { new: true },
   );
-  if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found for this clinic.' });
+  if (!appointment)
+    return res
+      .status(404)
+      .json({
+        success: false,
+        message: "Appointment not found for this clinic.",
+      });
 
-  if (status === 'cancelled' && appointment.email) {
+  if (status === "cancelled" && appointment.email) {
     const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
     if (clinic) {
       sendEmail({
         to: appointment.email,
-        subject: 'Appointment cancelled - ' + clinic.clinicName,
+        subject: "Appointment cancelled - " + clinic.clinicName,
         html: cancelEmail(clinic, appointment),
       }).catch(() => {});
     }
@@ -2078,23 +2795,32 @@ async function setStatus(req, res, status) {
   // already committed, so a socket problem must never fail the request.
   broadcastQueue(req.clinicId, appointment.date, status).catch(() => {});
 
-  const words = { visited: 'marked as visited', booked: 'reverted to unvisited', cancelled: 'cancelled' };
+  const words = {
+    visited: "marked as visited",
+    booked: "reverted to unvisited",
+    cancelled: "cancelled",
+  };
   return res.json({
     success: true,
-    message: 'Appointment #' + appointment.bookingNumber + ' ' + words[status] + '.',
-    appointment: Object.assign(appointment.toObject(), { dateLabel: dateLabel(appointment.date) }),
+    message:
+      "Appointment #" + appointment.bookingNumber + " " + words[status] + ".",
+    appointment: Object.assign(appointment.toObject(), {
+      dateLabel: dateLabel(appointment.date),
+    }),
   });
 }
 
 // Pebble grid feed: every token from 1..maxToken for the date, including gaps
 // (marked "empty") so the dial-pad layout never skips a position.
 app.get(
-  '/api/admin/queue',
+  "/api/admin/queue",
   clinicAuth,
   ah(async (req, res) => {
-    const date = str(req.query.date) || todayStr();
+    const date = ymdOr(req.query.date, todayStr());
     const live = await liveQueue(req.clinicId, date);
-    const rows = await Appointment.find({ clinicId: req.clinicId, date }).sort({ bookingNumber: 1 }).lean();
+    const rows = await Appointment.find({ clinicId: req.clinicId, date })
+      .sort({ bookingNumber: 1 })
+      .lean();
 
     const byToken = {};
     for (const row of rows) {
@@ -2120,36 +2846,71 @@ app.get(
 
     const tokens = [];
     for (let n = 1; n <= live.maxToken; n += 1) {
-      tokens.push(byToken[n] || { bookingNumber: n, status: 'empty' });
+      tokens.push(byToken[n] || { bookingNumber: n, status: "empty" });
     }
 
     const summary = Object.assign({}, live);
     delete summary.tokens;
 
-    return res.json({ success: true, date, dateLabel: dateLabel(date), live: summary, tokens });
-  })
+    return res.json({
+      success: true,
+      date,
+      dateLabel: dateLabel(date),
+      live: summary,
+      tokens,
+    });
+  }),
 );
 
-app.put('/api/admin/appointments/:id/visited', clinicAuth, ah((req, res) => setStatus(req, res, 'visited')));
-app.put('/api/admin/appointments/:id/unvisited', clinicAuth, ah((req, res) => setStatus(req, res, 'booked')));
-app.put('/api/admin/appointments/:id/cancel', clinicAuth, ah((req, res) => setStatus(req, res, 'cancelled')));
+app.put(
+  "/api/admin/appointments/:id/visited",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "visited")),
+);
+app.put(
+  "/api/admin/appointments/:id/unvisited",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "booked")),
+);
+app.put(
+  "/api/admin/appointments/:id/cancel",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "cancelled")),
+);
 
 app.get(
-  '/api/admin/appointments/:id',
+  "/api/admin/appointments/:id",
   clinicAuth,
   ah(async (req, res) => {
     const id = str(req.params.id);
-    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ success: false, message: 'Invalid appointment id.' });
-    const appointment = await Appointment.findOne({ _id: id, clinicId: req.clinicId }).lean();
-    if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found for this clinic.' });
-    return res.json({ success: true, appointment: Object.assign({}, appointment, { dateLabel: dateLabel(appointment.date) }) });
-  })
+    if (!mongoose.isValidObjectId(id))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid appointment id." });
+    const appointment = await Appointment.findOne({
+      _id: id,
+      clinicId: req.clinicId,
+    }).lean();
+    if (!appointment)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Appointment not found for this clinic.",
+        });
+    return res.json({
+      success: true,
+      appointment: Object.assign({}, appointment, {
+        dateLabel: dateLabel(appointment.date),
+      }),
+    });
+  }),
 );
 
 // Reception walk-in entry: shares the exact same per-clinic-per-day counter as
 // online bookings, so both are interleaved in one queue by arrival order.
 app.post(
-  '/api/admin/walk-in',
+  "/api/admin/walk-in",
   clinicAuth,
   ah(async (req, res) => {
     // The panel posts { form: {...} } (same shape as /api/booking/send-otp),
@@ -2158,81 +2919,149 @@ app.post(
     const submitted = body.form || body.formData || body;
     const form = Object.assign({}, submitted, { date: todayStr() });
     const problem = validateAppointmentForm(form, { walkIn: true });
-    if (problem) return res.status(400).json({ success: false, message: problem });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
 
     const clinic = await Clinic.findOne({ clinicId: req.clinicId });
-    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
 
-    const appointment = await createAppointment(req.clinicId, form, 'walk-in');
+    const appointment = await createAppointment(req.clinicId, form, "walk-in");
 
     if (appointment.email) {
       sendEmail({
         to: appointment.email,
-        subject: 'You are in the queue - token #' + appointment.bookingNumber + ' at ' + clinic.clinicName,
+        subject:
+          "You are in the queue - token #" +
+          appointment.bookingNumber +
+          " at " +
+          clinic.clinicName,
         html: confirmEmail(clinic, appointment),
       }).catch(() => {});
     }
 
-    broadcastQueue(req.clinicId, appointment.date, 'walk-in').catch(() => {});
+    broadcastQueue(req.clinicId, appointment.date, "walk-in").catch(() => {});
 
     return res.status(201).json({
       success: true,
-      message: appointment.name + ' added to today\'s queue as token #' + appointment.bookingNumber + '.',
-      appointment: Object.assign(appointment.toObject(), { dateLabel: dateLabel(appointment.date) }),
+      message:
+        appointment.name +
+        " added to today's queue as token #" +
+        appointment.bookingNumber +
+        ".",
+      appointment: Object.assign(appointment.toObject(), {
+        dateLabel: dateLabel(appointment.date),
+      }),
     });
-  })
+  }),
 );
 
 app.put(
-  '/api/admin/profile',
+  "/api/admin/profile",
   clinicAuth,
   ah(async (req, res) => {
     const body = req.body || {};
     const updates = {};
-    const editable = ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'phone', 'photo', 'photoKey', 'about', 'timings', 'adminEmail'];
+    const editable = [
+      "clinicName",
+      "doctorName",
+      "specialization",
+      "address",
+      "city",
+      "phone",
+      "photo",
+      "photoKey",
+      "about",
+      "timings",
+      "adminEmail",
+    ];
     for (const field of editable) {
       if (body[field] !== undefined) updates[field] = str(body[field]);
     }
     if (updates.phone && !/^\d{10}$/.test(updates.phone)) {
-      return res.status(400).json({ success: false, message: 'Clinic phone number must be exactly 10 digits.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Clinic phone number must be exactly 10 digits.",
+        });
     }
     if (updates.adminEmail && !EMAIL_RE.test(updates.adminEmail)) {
-      return res.status(400).json({ success: false, message: 'Please enter a valid admin email address.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Please enter a valid admin email address.",
+        });
     }
-    if (updates.clinicName === '') return res.status(400).json({ success: false, message: 'Clinic name cannot be empty.' });
+    if (updates.clinicName === "")
+      return res
+        .status(400)
+        .json({ success: false, message: "Clinic name cannot be empty." });
 
     /* Remember the outgoing photo so a replaced file is removed from R2 instead
        of sitting there forever as an orphan. */
     const previous = await Clinic.findOne({ clinicId: req.clinicId }).lean();
-    const oldPhotoKey = previous ? str(previous.photoKey) : '';
+    const oldPhotoKey = previous ? str(previous.photoKey) : "";
 
-    const clinic = await Clinic.findOneAndUpdate({ clinicId: req.clinicId }, updates, { new: true, runValidators: true });
-    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId },
+      updates,
+      { new: true, runValidators: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
 
-    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey)) r2Delete(oldPhotoKey).catch(() => {});
+    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey))
+      r2Delete(oldPhotoKey).catch(() => {});
 
-    return res.json({ success: true, message: 'Clinic profile updated.', clinic: adminClinic(clinic) });
-  })
+    return res.json({
+      success: true,
+      message: "Clinic profile updated.",
+      clinic: adminClinic(clinic),
+    });
+  }),
 );
 
 app.put(
-  '/api/admin/password',
+  "/api/admin/password",
   clinicAuth,
   ah(async (req, res) => {
     const currentPassword = str((req.body || {}).currentPassword);
     const newPassword = str((req.body || {}).newPassword);
-    if (newPassword.length < 6) return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+    if (newPassword.length < 6)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "New password must be at least 6 characters.",
+        });
 
     const clinic = await Clinic.findOne({ clinicId: req.clinicId });
-    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
     if (!(await bcrypt.compare(currentPassword, clinic.passwordHash))) {
-      return res.status(401).json({ success: false, message: 'Your current password is incorrect.' });
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "Your current password is incorrect.",
+        });
     }
 
     clinic.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await clinic.save();
-    return res.json({ success: true, message: 'Password changed successfully.' });
-  })
+    return res.json({
+      success: true,
+      message: "Password changed successfully.",
+    });
+  }),
 );
 
 /* ------------------------------------------------------- scheduled clean-up -- */
@@ -2241,28 +3070,30 @@ async function runCleanup(trigger) {
   if (!dbUp()) return;
   try {
     const cutoff = new Date(Date.now() - CLEANUP_DAYS * 24 * 60 * 60 * 1000);
-    const removed = await Appointment.deleteMany({ createdAt: { $lt: cutoff } });
+    const removed = await Appointment.deleteMany({
+      createdAt: { $lt: cutoff },
+    });
     const staleDate = addDays(todayStr(), -CLEANUP_DAYS);
     const counters = await QueueToken.deleteMany({ date: { $lt: staleDate } });
     if (removed.deletedCount || counters.deletedCount) {
       console.log(
-        '[cleanup] (' +
+        "[cleanup] (" +
           trigger +
-          ') removed ' +
+          ") removed " +
           removed.deletedCount +
-          ' appointment(s) older than ' +
+          " appointment(s) older than " +
           CLEANUP_DAYS +
-          ' days and ' +
+          " days and " +
           counters.deletedCount +
-          ' stale queue counter(s).'
+          " stale queue counter(s).",
       );
     }
   } catch (error) {
-    console.error('[ERROR] Cleanup failed:', error.message);
+    console.error("[ERROR] Cleanup failed:", error.message);
   }
 }
 
-cron.schedule('0 0 * * *', () => runCleanup('nightly cron'), { timezone: TZ });
+cron.schedule("0 0 * * *", () => runCleanup("nightly cron"), { timezone: TZ });
 
 /* ------------------------------------------------------- error handling -- */
 
@@ -2273,55 +3104,81 @@ cron.schedule('0 0 * * *', () => runCleanup('nightly cron'), { timezone: TZ });
    on every appointment, so renaming it would orphan a the entire history of a clinic. */
 
 app.post(
-  '/api/owner/login',
+  "/api/owner/login",
   ah(async (req, res) => {
     if (!OWNER_PASSWORD) {
       return res.status(503).json({
         success: false,
-        message: 'Master admin is not configured. Add OWNER_ID, OWNER_PASSWORD and OWNER_EMAIL to Backend/.env, then restart the server.',
+        message:
+          "Master admin is not configured. Add OWNER_ID, OWNER_PASSWORD and OWNER_EMAIL to Backend/.env, then restart the server.",
       });
     }
     const userId = str((req.body || {}).userId).toLowerCase();
     const password = str((req.body || {}).password);
-    if (!userId || !password) return res.status(400).json({ success: false, message: 'Enter your owner ID and password.' });
+    if (!userId || !password)
+      return res
+        .status(400)
+        .json({ success: false, message: "Enter your owner ID and password." });
 
     const ok = userId === OWNER_ID && sameSecret(password, OWNER_PASSWORD);
-    if (!ok) return res.status(401).json({ success: false, message: 'Incorrect owner ID or password.' });
+    if (!ok)
+      return res
+        .status(401)
+        .json({ success: false, message: "Incorrect owner ID or password." });
 
     return res.json({
       success: true,
-      message: 'Welcome back.',
+      message: "Welcome back.",
       token: signOwnerToken(),
       owner: { ownerId: OWNER_ID, email: OWNER_EMAIL },
     });
-  })
+  }),
 );
 
-app.get('/api/owner/me', ownerAuth, (req, res) =>
-  res.json({ success: true, owner: { ownerId: req.owner.ownerId, email: OWNER_EMAIL, notifications: Boolean(OWNER_EMAIL) } })
+app.get("/api/owner/me", ownerAuth, (req, res) =>
+  res.json({
+    success: true,
+    owner: {
+      ownerId: req.owner.ownerId,
+      email: OWNER_EMAIL,
+      notifications: Boolean(OWNER_EMAIL),
+    },
+  }),
 );
 
 app.get(
-  '/api/owner/overview',
+  "/api/owner/overview",
   ownerAuth,
   ah(async (_req, res) => {
     const today = todayStr();
-    const [total, pending, approved, rejected, hidden, listed, bookingsToday] = await Promise.all([
-      Clinic.countDocuments({}),
-      Clinic.countDocuments({ status: 'pending' }),
-      Clinic.countDocuments({ status: 'approved' }),
-      Clinic.countDocuments({ status: 'rejected' }),
-      Clinic.countDocuments({ status: 'approved', hidden: true }),
-      Clinic.countDocuments(directoryFilter()),
-      Appointment.countDocuments({ date: today, status: { $ne: 'cancelled' } }),
-    ]);
+    const [total, pending, approved, rejected, hidden, listed, bookingsToday] =
+      await Promise.all([
+        Clinic.countDocuments({}),
+        Clinic.countDocuments({ status: "pending" }),
+        Clinic.countDocuments({ status: "approved" }),
+        Clinic.countDocuments({ status: "rejected" }),
+        Clinic.countDocuments({ status: "approved", hidden: true }),
+        Clinic.countDocuments(directoryFilter()),
+        Appointment.countDocuments({
+          date: today,
+          status: { $ne: "cancelled" },
+        }),
+      ]);
     return res.json({
       success: true,
       today,
       dateLabel: dateLabel(today),
-      counts: { total, pending, approved, rejected, hidden, listed, bookingsToday },
+      counts: {
+        total,
+        pending,
+        approved,
+        rejected,
+        hidden,
+        listed,
+        bookingsToday,
+      },
     });
-  })
+  }),
 );
 
 /* One search box covers clinic/hospital name, doctor, specialization, address,
@@ -2331,11 +3188,14 @@ function ownerSearchFilter(query) {
   const status = str(query.status);
   const visibility = str(query.visibility);
   const filter = {};
-  if (status && status !== 'all') filter.status = status;
-  if (visibility === 'hidden') filter.hidden = true;
-  if (visibility === 'visible') filter.hidden = false;
+  if (status && status !== "all") filter.status = status;
+  if (visibility === "hidden") filter.hidden = true;
+  if (visibility === "visible") filter.hidden = false;
   if (search) {
-    const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    const rx = {
+      $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      $options: "i",
+    };
     filter.$or = [
       { clinicName: rx },
       { doctorName: rx },
@@ -2354,16 +3214,28 @@ function ownerSearchFilter(query) {
 // Pending first, then newest, so the approval queue reads top-down.
 async function listOwnerClinics(filter, limit = 300) {
   const order = { pending: 0, approved: 1, rejected: 2 };
-  const clinics = await Clinic.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  const clinics = await Clinic.find(filter)
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
   if (!clinics.length) return [];
 
   const ids = clinics.map((c) => c.clinicId);
   const today = todayStr();
   const [totals, todays] = await Promise.all([
-    Appointment.aggregate([{ $match: { clinicId: { $in: ids } } }, { $group: { _id: '$clinicId', n: { $sum: 1 } } }]),
     Appointment.aggregate([
-      { $match: { clinicId: { $in: ids }, date: today, status: { $ne: 'cancelled' } } },
-      { $group: { _id: '$clinicId', n: { $sum: 1 } } },
+      { $match: { clinicId: { $in: ids } } },
+      { $group: { _id: "$clinicId", n: { $sum: 1 } } },
+    ]),
+    Appointment.aggregate([
+      {
+        $match: {
+          clinicId: { $in: ids },
+          date: today,
+          status: { $ne: "cancelled" },
+        },
+      },
+      { $group: { _id: "$clinicId", n: { $sum: 1 } } },
     ]),
   ]);
   const totalBy = {};
@@ -2372,71 +3244,97 @@ async function listOwnerClinics(filter, limit = 300) {
   for (const r of todays) todayBy[r._id] = r.n;
 
   return clinics
-    .map((c) => ownerClinic(c, { total: totalBy[c.clinicId] || 0, today: todayBy[c.clinicId] || 0 }))
+    .map((c) =>
+      ownerClinic(c, {
+        total: totalBy[c.clinicId] || 0,
+        today: todayBy[c.clinicId] || 0,
+      }),
+    )
     .sort((a, b) => {
-      const rank = (order[a.status] === undefined ? 3 : order[a.status]) - (order[b.status] === undefined ? 3 : order[b.status]);
+      const rank =
+        (order[a.status] === undefined ? 3 : order[a.status]) -
+        (order[b.status] === undefined ? 3 : order[b.status]);
       if (rank !== 0) return rank;
       return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
     });
 }
 
 app.get(
-  '/api/owner/clinics',
+  "/api/owner/clinics",
   ownerAuth,
   ah(async (req, res) => {
     const clinics = await listOwnerClinics(ownerSearchFilter(req.query || {}));
     return res.json({ success: true, count: clinics.length, clinics });
-  })
+  }),
 );
 
 // The approval queue: pending listings only, with its own search.
 app.get(
-  '/api/owner/requests',
+  "/api/owner/requests",
   ownerAuth,
   ah(async (req, res) => {
-    const filter = ownerSearchFilter(Object.assign({}, req.query || {}, { status: 'pending', visibility: 'all' }));
+    const filter = ownerSearchFilter(
+      Object.assign({}, req.query || {}, {
+        status: "pending",
+        visibility: "all",
+      }),
+    );
     const clinics = await listOwnerClinics(filter);
     return res.json({ success: true, count: clinics.length, clinics });
-  })
+  }),
 );
 
 app.put(
-  '/api/owner/clinics/:clinicId/approve',
+  "/api/owner/clinics/:clinicId/approve",
   ownerAuth,
   ah(async (req, res) => {
     const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
-    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
-    if (clinic.status === 'approved') {
-      return res.json({ success: true, message: clinic.clinicName + ' is already approved.', clinic: ownerClinic(clinic) });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "That listing no longer exists." });
+    if (clinic.status === "approved") {
+      return res.json({
+        success: true,
+        message: clinic.clinicName + " is already approved.",
+        clinic: ownerClinic(clinic),
+      });
     }
 
-    clinic.status = 'approved';
+    clinic.status = "approved";
     clinic.hidden = false;
     clinic.decidedAt = new Date();
     clinic.decidedBy = OWNER_ID;
-    clinic.rejectionNote = '';
+    clinic.rejectionNote = "";
     await clinic.save();
 
     // welcomeEmail() already reads "your clinic is live" - exactly right here.
-    sendEmail({ to: clinic.adminEmail, subject: 'Your clinic is live on ' + BRAND, html: welcomeEmail(clinic) }).catch(() => {});
+    sendEmail({
+      to: clinic.adminEmail,
+      subject: "Your clinic is live on " + BRAND,
+      html: welcomeEmail(clinic),
+    }).catch(() => {});
 
     return res.json({
       success: true,
-      message: clinic.clinicName + ' is approved and now listed publicly.',
+      message: clinic.clinicName + " is approved and now listed publicly.",
       clinic: ownerClinic(clinic),
     });
-  })
+  }),
 );
 
 app.put(
-  '/api/owner/clinics/:clinicId/reject',
+  "/api/owner/clinics/:clinicId/reject",
   ownerAuth,
   ah(async (req, res) => {
     const note = str((req.body || {}).note);
     const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
-    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "That listing no longer exists." });
 
-    clinic.status = 'rejected';
+    clinic.status = "rejected";
     clinic.hidden = false;
     clinic.decidedAt = new Date();
     clinic.decidedBy = OWNER_ID;
@@ -2445,25 +3343,37 @@ app.put(
 
     sendEmail({
       to: clinic.adminEmail,
-      subject: 'Update on your ' + BRAND + ' listing request',
+      subject: "Update on your " + BRAND + " listing request",
       html: listingRejectedEmail(clinic, note),
     }).catch(() => {});
 
-    return res.json({ success: true, message: clinic.clinicName + ' was rejected.', clinic: ownerClinic(clinic) });
-  })
+    return res.json({
+      success: true,
+      message: clinic.clinicName + " was rejected.",
+      clinic: ownerClinic(clinic),
+    });
+  }),
 );
 
 /* Hide / unhide only affects the public directory. The clinic keeps working, so
    patients holding a token can still track it. */
 app.put(
-  '/api/owner/clinics/:clinicId/visibility',
+  "/api/owner/clinics/:clinicId/visibility",
   ownerAuth,
   ah(async (req, res) => {
     const hidden = Boolean((req.body || {}).hidden);
     const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
-    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
-    if (clinic.status !== 'approved') {
-      return res.status(400).json({ success: false, message: 'Only approved listings can be hidden or unhidden.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "That listing no longer exists." });
+    if (clinic.status !== "approved") {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Only approved listings can be hidden or unhidden.",
+        });
     }
 
     clinic.hidden = hidden;
@@ -2471,28 +3381,40 @@ app.put(
 
     return res.json({
       success: true,
-      message: clinic.clinicName + (hidden ? ' is hidden from the homepage.' : ' is back on the homepage.'),
+      message:
+        clinic.clinicName +
+        (hidden
+          ? " is hidden from the homepage."
+          : " is back on the homepage."),
       clinic: ownerClinic(clinic),
     });
-  })
+  }),
 );
 
 // Owner-created listings skip the approval queue - the owner IS the approver.
 app.post(
-  '/api/owner/clinics',
+  "/api/owner/clinics",
   ownerAuth,
   ah(async (req, res) => {
     const body = req.body || {};
     const problem = validateRegistration(body);
-    if (problem) return res.status(400).json({ success: false, message: problem });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
 
     const adminUserId = str(body.adminUserId).toLowerCase();
     if (await Clinic.exists({ adminUserId })) {
-      return res.status(409).json({ success: false, message: 'That admin user ID is already taken. Please choose another.' });
+      return res
+        .status(409)
+        .json({
+          success: false,
+          message:
+            "That admin user ID is already taken. Please choose another.",
+        });
     }
 
-    let clinicId = slugify(body.clinicName) || 'clinic';
-    if (await Clinic.exists({ clinicId })) clinicId = clinicId + '-' + crypto.randomBytes(2).toString('hex');
+    let clinicId = slugify(body.clinicName) || "clinic";
+    if (await Clinic.exists({ clinicId }))
+      clinicId = clinicId + "-" + crypto.randomBytes(2).toString("hex");
 
     const clinic = await Clinic.create({
       clinicId,
@@ -2509,46 +3431,74 @@ app.post(
       adminUserId,
       adminEmail: str(body.adminEmail).toLowerCase(),
       passwordHash: await bcrypt.hash(str(body.password), BCRYPT_ROUNDS),
-      status: 'approved',
+      status: "approved",
       hidden: false,
       decidedAt: new Date(),
       decidedBy: OWNER_ID,
     });
 
-    sendEmail({ to: clinic.adminEmail, subject: 'Your clinic is live on ' + BRAND, html: welcomeEmail(clinic) }).catch(() => {});
+    sendEmail({
+      to: clinic.adminEmail,
+      subject: "Your clinic is live on " + BRAND,
+      html: welcomeEmail(clinic),
+    }).catch(() => {});
 
     return res.status(201).json({
       success: true,
-      message: clinic.clinicName + ' was added and listed publicly.',
+      message: clinic.clinicName + " was added and listed publicly.",
       clinic: ownerClinic(clinic),
     });
-  })
+  }),
 );
 
 app.put(
-  '/api/owner/clinics/:clinicId',
+  "/api/owner/clinics/:clinicId",
   ownerAuth,
   ah(async (req, res) => {
     const body = req.body || {};
     const clinic = await Clinic.findOne({ clinicId: str(req.params.clinicId) });
-    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "That listing no longer exists." });
 
     const oldPhotoKey = str(clinic.photoKey);
 
-    for (const field of ['clinicName', 'doctorName', 'specialization', 'address', 'city', 'photo', 'photoKey', 'about', 'timings']) {
+    for (const field of [
+      "clinicName",
+      "doctorName",
+      "specialization",
+      "address",
+      "city",
+      "photo",
+      "photoKey",
+      "about",
+      "timings",
+    ]) {
       if (body[field] !== undefined) clinic[field] = str(body[field]);
     }
 
     if (body.phone !== undefined) {
       const phone = str(body.phone);
-      if (!/^\d{10}$/.test(phone)) return res.status(400).json({ success: false, message: 'Clinic phone number must be exactly 10 digits.' });
+      if (!/^\d{10}$/.test(phone))
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Clinic phone number must be exactly 10 digits.",
+          });
       clinic.phone = phone;
     }
 
     if (body.adminEmail !== undefined) {
       const email = str(body.adminEmail).toLowerCase();
       if (!EMAIL_RE.test(email)) {
-        return res.status(400).json({ success: false, message: 'Please enter a valid admin email address.' });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Please enter a valid admin email address.",
+          });
       }
       clinic.adminEmail = email;
     }
@@ -2556,10 +3506,24 @@ app.put(
     if (body.adminUserId !== undefined) {
       const wanted = str(body.adminUserId).toLowerCase();
       if (!/^[a-zA-Z0-9_.]{4,24}$/.test(wanted)) {
-        return res.status(400).json({ success: false, message: 'Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).' });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).",
+          });
       }
-      if (wanted !== clinic.adminUserId && (await Clinic.exists({ adminUserId: wanted }))) {
-        return res.status(409).json({ success: false, message: 'That admin user ID is already taken.' });
+      if (
+        wanted !== clinic.adminUserId &&
+        (await Clinic.exists({ adminUserId: wanted }))
+      ) {
+        return res
+          .status(409)
+          .json({
+            success: false,
+            message: "That admin user ID is already taken.",
+          });
       }
       clinic.adminUserId = wanted;
     }
@@ -2567,33 +3531,58 @@ app.put(
     // Only reset the password when a new one is actually supplied.
     if (str(body.password)) {
       if (str(body.password).length < 6) {
-        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Password must be at least 6 characters long.",
+          });
       }
-      clinic.passwordHash = await bcrypt.hash(str(body.password), BCRYPT_ROUNDS);
+      clinic.passwordHash = await bcrypt.hash(
+        str(body.password),
+        BCRYPT_ROUNDS,
+      );
     }
 
     if (body.active !== undefined) clinic.active = Boolean(body.active);
 
-    if (!str(clinic.clinicName) || !str(clinic.doctorName) || !str(clinic.address)) {
-      return res.status(400).json({ success: false, message: 'Clinic name, doctor name and address cannot be empty.' });
+    if (
+      !str(clinic.clinicName) ||
+      !str(clinic.doctorName) ||
+      !str(clinic.address)
+    ) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Clinic name, doctor name and address cannot be empty.",
+        });
     }
 
     await clinic.save();
-    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey)) r2Delete(oldPhotoKey).catch(() => {});
+    if (oldPhotoKey && oldPhotoKey !== str(clinic.photoKey))
+      r2Delete(oldPhotoKey).catch(() => {});
 
-    return res.json({ success: true, message: clinic.clinicName + ' was updated.', clinic: ownerClinic(clinic) });
-  })
+    return res.json({
+      success: true,
+      message: clinic.clinicName + " was updated.",
+      clinic: ownerClinic(clinic),
+    });
+  }),
 );
 
 /* Deleting a listing removes its appointments and queue counters too - leaving
    them behind would keep consuming token numbers for a clinic that is gone. */
 app.delete(
-  '/api/owner/clinics/:clinicId',
+  "/api/owner/clinics/:clinicId",
   ownerAuth,
   ah(async (req, res) => {
     const clinicId = str(req.params.clinicId);
     const clinic = await Clinic.findOne({ clinicId });
-    if (!clinic) return res.status(404).json({ success: false, message: 'That listing no longer exists.' });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "That listing no longer exists." });
 
     const appointments = await Appointment.countDocuments({ clinicId });
     await Appointment.deleteMany({ clinicId });
@@ -2603,10 +3592,14 @@ app.delete(
 
     return res.json({
       success: true,
-      message: clinic.clinicName + ' and ' + appointments + ' appointment record(s) were deleted.',
+      message:
+        clinic.clinicName +
+        " and " +
+        appointments +
+        " appointment record(s) were deleted.",
       deleted: { clinicId, clinicName: clinic.clinicName, appointments },
     });
-  })
+  }),
 );
 
 /* --------------------------------------------------------- image upload -- */
@@ -2614,109 +3607,188 @@ app.delete(
 /* The browser posts the raw (already downscaled) image bytes as the request
    body, so there is no multipart parser and no base64 inflation. */
 app.post(
-  '/api/upload/clinic-photo',
-  express.raw({ type: ['image/*', 'application/octet-stream'], limit: MAX_IMAGE_BYTES + 4096 }),
+  "/api/upload/clinic-photo",
+  express.raw({
+    type: ["image/*", "application/octet-stream"],
+    limit: MAX_IMAGE_BYTES + 4096,
+  }),
   ah(async (req, res) => {
     if (!r2Ready()) {
       return res.status(503).json({
         success: false,
         message:
-          'Image storage is not configured. Add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME to Backend/.env, then restart.',
+          "Image storage is not configured. Add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME to Backend/.env, then restart.",
       });
     }
 
-    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim() || 'unknown';
+    const ip =
+      String(req.headers["x-forwarded-for"] || req.ip || "")
+        .split(",")[0]
+        .trim() || "unknown";
     if (!uploadAllowed(ip)) {
-      return res.status(429).json({ success: false, message: 'Too many uploads from this device. Please wait a few minutes.' });
+      return res
+        .status(429)
+        .json({
+          success: false,
+          message:
+            "Too many uploads from this device. Please wait a few minutes.",
+        });
     }
 
     const buffer = Buffer.isBuffer(req.body) ? req.body : null;
     if (!buffer || !buffer.length) {
-      return res.status(400).json({ success: false, message: 'No image data was received. Please choose the file again.' });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "No image data was received. Please choose the file again.",
+        });
     }
     if (buffer.length > MAX_IMAGE_BYTES) {
       return res.status(413).json({
         success: false,
-        message: 'That image is ' + Math.round(buffer.length / 1024) + ' KB. The limit is ' + Math.round(MAX_IMAGE_BYTES / 1024) + ' KB.',
+        message:
+          "That image is " +
+          Math.round(buffer.length / 1024) +
+          " KB. The limit is " +
+          Math.round(MAX_IMAGE_BYTES / 1024) +
+          " KB.",
       });
     }
 
     const kind = sniffImage(buffer);
     if (!kind) {
-      return res.status(415).json({ success: false, message: 'Only JPG, PNG, WEBP or GIF images can be uploaded.' });
+      return res
+        .status(415)
+        .json({
+          success: false,
+          message: "Only JPG, PNG, WEBP or GIF images can be uploaded.",
+        });
     }
 
-    const key = 'clinic-' + Date.now().toString(36) + '-' + crypto.randomBytes(6).toString('hex') + '.' + kind.ext;
+    const key =
+      "clinic-" +
+      Date.now().toString(36) +
+      "-" +
+      crypto.randomBytes(6).toString("hex") +
+      "." +
+      kind.ext;
     try {
       await r2Put(key, buffer, kind.mime);
     } catch (error) {
-      console.error('[ERROR] R2 upload failed:', error.message);
-      return res.status(502).json({ success: false, message: 'The image could not be stored in R2. ' + error.message });
+      console.error("[ERROR] R2 upload failed:", error.message);
+      return res
+        .status(502)
+        .json({
+          success: false,
+          message: "The image could not be stored in R2. " + error.message,
+        });
     }
 
-    console.log('[upload] ' + key + ' (' + Math.round(buffer.length / 1024) + ' KB)');
+    console.log(
+      "[upload] " + key + " (" + Math.round(buffer.length / 1024) + " KB)",
+    );
     return res.status(201).json({
       success: true,
-      message: 'Photo uploaded.',
+      message: "Photo uploaded.",
       key,
       url: imageUrlFor(req, key),
       bytes: buffer.length,
       contentType: kind.mime,
     });
-  })
+  }),
 );
 
 /* Streams an R2 object through the API. This is what makes a PRIVATE bucket
    work with no public access and no custom domain. Setting R2_PUBLIC_URL skips
    this hop and serves straight from Cloudflare's edge instead. */
 app.get(
-  '/api/images/:key',
+  "/api/images/:key",
   ah(async (req, res) => {
     const key = str(req.params.key);
-    if (!/^[A-Za-z0-9._-]{6,120}$/.test(key)) return res.status(400).send('Bad image key');
-    if (!r2Ready()) return res.status(503).send('Image storage is not configured');
+    if (!/^[A-Za-z0-9._-]{6,120}$/.test(key))
+      return res.status(400).send("Bad image key");
+    if (!r2Ready())
+      return res.status(503).send("Image storage is not configured");
 
     let upstream;
     try {
       upstream = await r2Fetch(key);
     } catch (error) {
-      console.error('[warn] R2 read failed for ' + key + ':', error.message);
-      return res.status(502).send('Image unavailable');
+      console.error("[warn] R2 read failed for " + key + ":", error.message);
+      return res.status(502).send("Image unavailable");
     }
-    if (!upstream.ok) return res.status(upstream.status === 404 ? 404 : 502).send('Image not found');
+    if (!upstream.ok)
+      return res
+        .status(upstream.status === 404 ? 404 : 502)
+        .send("Image not found");
 
     const body = Buffer.from(await upstream.arrayBuffer());
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+    res.setHeader(
+      "Content-Type",
+      upstream.headers.get("content-type") || "image/jpeg",
+    );
     // Keys are random and never reused, so the object is safe to cache forever.
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     /* Explicit CORS so the QR card can draw this photo onto a canvas and still
        export a PNG - a tainted canvas would make the download throw. */
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader("Access-Control-Allow-Origin", "*");
     return res.end(body);
-  })
+  }),
 );
 
-app.use('/api', (req, res) =>
-  res.status(404).json({ success: false, message: 'No API route matches ' + req.method + ' ' + req.originalUrl })
+app.use("/api", (req, res) =>
+  res
+    .status(404)
+    .json({
+      success: false,
+      message: "No API route matches " + req.method + " " + req.originalUrl,
+    }),
 );
 
-app.use((_req, res) => res.status(404).json({ success: false, message: 'Not found. This server only exposes /api routes.' }));
+app.use((_req, res) =>
+  res
+    .status(404)
+    .json({
+      success: false,
+      message: "Not found. This server only exposes /api routes.",
+    }),
+);
 
 // Always JSON, never an HTML stack trace (that is what breaks the frontend).
 app.use((error, _req, res, _next) => {
-  console.error('[ERROR]', error.stack || error.message);
-  if (error.name === 'ValidationError') {
+  console.error("[ERROR]", error.stack || error.message);
+  if (error.name === "ValidationError") {
     const first = Object.values(error.errors || {})[0];
-    return res.status(400).json({ success: false, message: first ? first.message : 'Some fields were invalid.' });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: first ? first.message : "Some fields were invalid.",
+      });
   }
   if (error.code === 11000) {
-    return res.status(409).json({ success: false, message: 'That record already exists.' });
+    return res
+      .status(409)
+      .json({ success: false, message: "That record already exists." });
   }
-  return res.status(500).json({ success: false, message: 'Something went wrong on the server. Please try again.' });
+  return res
+    .status(500)
+    .json({
+      success: false,
+      message: "Something went wrong on the server. Please try again.",
+    });
 });
 
-process.on('unhandledRejection', (reason) => console.error('[ERROR] Unhandled rejection:', reason && reason.message ? reason.message : reason));
-process.on('uncaughtException', (error) => console.error('[ERROR] Uncaught exception:', error.message));
+process.on("unhandledRejection", (reason) =>
+  console.error(
+    "[ERROR] Unhandled rejection:",
+    reason && reason.message ? reason.message : reason,
+  ),
+);
+process.on("uncaughtException", (error) =>
+  console.error("[ERROR] Uncaught exception:", error.message),
+);
 
 /* -------------------------------------------------------------- start up -- */
 
@@ -2727,18 +3799,18 @@ const server = http.createServer(app);
 if (SocketServer) {
   io = new SocketServer(server, {
     // The frontend is served from a different origin in dev (5173 -> 5000).
-    cors: { origin: true, methods: ['GET', 'POST'], credentials: false },
+    cors: { origin: true, methods: ["GET", "POST"], credentials: false },
     pingInterval: 25000,
     pingTimeout: 20000,
   });
 
-  io.on('connection', (socket) => {
+  io.on("connection", (socket) => {
     /* A viewer watches exactly one clinic/day board at a time. Joining a new
        board leaves the previous one, so switching clinics or dates can never
        leave a socket subscribed to a queue nobody is looking at. */
-    socket.on('queue:join', async (payload) => {
+    socket.on("queue:join", async (payload) => {
       const clinicId = str(payload && payload.clinicId);
-      const date = str(payload && payload.date) || todayStr();
+      const date = ymdOr(payload && payload.date, todayStr());
       if (!clinicId) return;
 
       for (const room of Array.from(socket.rooms)) {
@@ -2750,13 +3822,15 @@ if (SocketServer) {
       // next change to see something.
       try {
         const live = await liveQueue(clinicId, date);
-        socket.emit('queue:update', { clinicId, date, reason: 'join', live });
+        socket.emit("queue:update", { clinicId, date, reason: "join", live });
       } catch (_error) {
-        socket.emit('queue:error', { message: 'That queue could not be loaded.' });
+        socket.emit("queue:error", {
+          message: "That queue could not be loaded.",
+        });
       }
     });
 
-    socket.on('queue:leave', () => {
+    socket.on("queue:leave", () => {
       for (const room of Array.from(socket.rooms)) {
         if (room !== socket.id) socket.leave(room);
       }
@@ -2782,7 +3856,7 @@ if (SocketServer) {
 
 const keepAlive = {
   enabled: false,
-  target: '',
+  target: "",
   minutes: 0,
   pings: 0,
   failed: 0,
@@ -2799,11 +3873,11 @@ async function pingSelf() {
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(keepAlive.target, {
-      method: 'GET',
-      headers: { 'User-Agent': BRAND + ' keep-alive' },
+      method: "GET",
+      headers: { "User-Agent": BRAND + " keep-alive" },
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error('HTTP ' + response.status);
+    if (!response.ok) throw new Error("HTTP " + response.status);
     const recovered = keepAlive.lastError !== null;
     keepAlive.pings += 1;
     keepAlive.lastPingAt = new Date().toISOString();
@@ -2811,12 +3885,13 @@ async function pingSelf() {
     // Deliberately quiet: a log line every 14 minutes forever would bury the
     // logs that actually matter. Only the first ping and recoveries speak up.
     if (keepAlive.pings === 1 || recovered) {
-      console.log('[OK] Keep-alive ping succeeded -> ' + keepAlive.target);
+      console.log("[OK] Keep-alive ping succeeded -> " + keepAlive.target);
     }
   } catch (error) {
     keepAlive.failed += 1;
-    keepAlive.lastError = error.name === 'AbortError' ? 'Ping timed out after 15s.' : error.message;
-    console.warn('[warn] Keep-alive ping failed:', keepAlive.lastError);
+    keepAlive.lastError =
+      error.name === "AbortError" ? "Ping timed out after 15s." : error.message;
+    console.warn("[warn] Keep-alive ping failed:", keepAlive.lastError);
   } finally {
     clearTimeout(timer);
     keepAliveBusy = false;
@@ -2827,13 +3902,13 @@ function startKeepAlive() {
   if (!KEEPALIVE_URL) return; // local dev, or RENDER_EXTERNAL_URL not provided
   if (!(KEEPALIVE_MINUTES > 0)) return; // explicitly disabled
 
-  const base = KEEPALIVE_URL.replace(/\/+$/, '');
+  const base = KEEPALIVE_URL.replace(/\/+$/, "");
   // Pinging localhost would loop inside the box and keep nothing awake.
   if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(base)) return;
 
   keepAlive.enabled = true;
   keepAlive.minutes = KEEPALIVE_MINUTES;
-  keepAlive.target = base + '/api/health';
+  keepAlive.target = base + "/api/health";
 
   // The first ping waits a minute so it never competes with cold-start work.
   setTimeout(pingSelf, 60 * 1000);
@@ -2842,36 +3917,71 @@ function startKeepAlive() {
 
 server.listen(PORT, () => {
   startKeepAlive();
-  console.log('');
-  console.log('  ' + BRAND + ' API');
-  console.log('  ------------------------------------------------------');
-  console.log('  Server      http://localhost:' + PORT);
-  console.log('  Health      http://localhost:' + PORT + '/api/health');
-  console.log('  Database    ' + (MONGODB_URI ? DB_NAME + ' (connecting...)' : 'MONGODB_URI missing in .env'));
-  console.log('  Mailer      ' + (GOOGLE_SCRIPT_URL ? 'Google Apps Script configured' : 'GOOGLE_SCRIPT_URL missing in .env'));
-  console.log('  Realtime    ' + (io ? 'Socket.IO live on /socket.io' : 'polling only - run: npm install socket.io'));
-  console.log('  Timezone    ' + TZ + '  (today = ' + todayStr() + ')');
-  console.log('  Cleanup     appointments older than ' + CLEANUP_DAYS + ' days, daily at midnight');
-  console.log('  Booking     today + next ' + BOOKING_DAYS + ' days');
+  console.log("");
+  console.log("  " + BRAND + " API");
+  console.log("  ------------------------------------------------------");
+  console.log("  Server      http://localhost:" + PORT);
+  console.log("  Health      http://localhost:" + PORT + "/api/health");
   console.log(
-    '  Images      ' +
+    "  Database    " +
+      (MONGODB_URI
+        ? DB_NAME + " (connecting...)"
+        : "MONGODB_URI missing in .env"),
+  );
+  console.log(
+    "  Mailer      " +
+      (GOOGLE_SCRIPT_URL
+        ? "Google Apps Script configured"
+        : "GOOGLE_SCRIPT_URL missing in .env"),
+  );
+  console.log(
+    "  Realtime    " +
+      (io
+        ? "Socket.IO live on /socket.io"
+        : "polling only - run: npm install socket.io"),
+  );
+  console.log("  Timezone    " + TZ + "  (today = " + todayStr() + ")");
+  console.log(
+    "  Cleanup     appointments older than " +
+      CLEANUP_DAYS +
+      " days, daily at midnight",
+  );
+  console.log("  Booking     today + next " + BOOKING_DAYS + " days");
+  console.log(
+    "  Images      " +
       (r2Ready()
-        ? 'Cloudflare R2 -> ' + R2_BUCKET_NAME + '  (max ' + Math.round(MAX_IMAGE_BYTES / 1024) + ' KB' + (R2_PUBLIC_URL ? ', public URL' : ', proxied') + ')'
-        : 'DISABLED - set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME in .env')
+        ? "Cloudflare R2 -> " +
+          R2_BUCKET_NAME +
+          "  (max " +
+          Math.round(MAX_IMAGE_BYTES / 1024) +
+          " KB" +
+          (R2_PUBLIC_URL ? ", public URL" : ", proxied") +
+          ")"
+        : "DISABLED - set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME in .env"),
   );
-  console.log('  BookingOTP  ' + (REQUIRE_BOOKING_OTP ? 'required (email mandatory)' : 'off - one step, email optional'));
   console.log(
-    '  Owner      ' +
+    "  BookingOTP  " +
+      (REQUIRE_BOOKING_OTP
+        ? "required (email mandatory)"
+        : "off - one step, email optional"),
+  );
+  console.log(
+    "  Owner      " +
       (OWNER_PASSWORD
-        ? 'master panel at /#/owner  (id: ' + OWNER_ID + ')'
-        : 'DISABLED - set OWNER_ID + OWNER_PASSWORD + OWNER_EMAIL in .env')
+        ? "master panel at /#/owner  (id: " + OWNER_ID + ")"
+        : "DISABLED - set OWNER_ID + OWNER_PASSWORD + OWNER_EMAIL in .env"),
   );
-  console.log('  Approvals   ' + (OWNER_EMAIL ? 'alerts email ' + OWNER_EMAIL : 'no OWNER_EMAIL - approval alerts disabled'));
   console.log(
-    '  Keep-alive  ' +
-      (keepAlive.enabled
-        ? 'every ' + keepAlive.minutes + ' min -> ' + keepAlive.target
-        : 'off (set KEEPALIVE_URL, or deploy on Render)')
+    "  Approvals   " +
+      (OWNER_EMAIL
+        ? "alerts email " + OWNER_EMAIL
+        : "no OWNER_EMAIL - approval alerts disabled"),
   );
-  console.log('');
+  console.log(
+    "  Keep-alive  " +
+      (keepAlive.enabled
+        ? "every " + keepAlive.minutes + " min -> " + keepAlive.target
+        : "off (set KEEPALIVE_URL, or deploy on Render)"),
+  );
+  console.log("");
 });

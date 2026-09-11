@@ -6383,8 +6383,11 @@ function QueueTrackPage({ clinicId, go }) {
     if (stamp && stampRef.current && stamp < stampRef.current) return false;
     if (stamp) stampRef.current = stamp;
     setBoard((prev) => {
-      const base = clinic ? { success: true, clinic: clinic } : prev;
-      if (!base) return prev;
+      /* A realtime push carries no clinic header, so it reuses whatever is on
+         screen. If a push somehow lands before the very first fetch, the board
+         still renders - the header just stays blank until the fetch arrives -
+         instead of the update being discarded for ever. */
+      const base = clinic ? { success: true, clinic: clinic } : prev || { success: true, clinic: null };
       return Object.assign({}, base, { live: nextLive });
     });
     setBeat(Date.now());
@@ -6473,6 +6476,13 @@ function QueueTrackPage({ clinicId, go }) {
   };
 
   const live = board ? board.live : null;
+  const clinicInfo = board && board.clinic ? board.clinic : null;
+
+  /* One normalised list. Every consumer below used to reach straight into
+     live.tokens, so any snapshot that arrived without a tokens array - an
+     older backend, a truncated body, a proxy hiccup - threw instead of simply
+     rendering an empty board. */
+  const tokens = live && Array.isArray(live.tokens) ? live.tokens : [];
   const pace = live ? live.paceMinutes || live.defaultPaceMinutes : 8;
   const myToken = picked ? picked.bookingNumber : null;
 
@@ -6481,7 +6491,7 @@ function QueueTrackPage({ clinicId, go }) {
      or an emergency case is seen out of order. */
   const ahead =
     live && myToken
-      ? live.tokens.filter((row) => row.status === 'booked' && row.bookingNumber < myToken).length
+      ? tokens.filter((row) => row.status === 'booked' && row.bookingNumber < myToken).length
       : 0;
   const etaMin = ahead * pace;
   const isToday = picked ? picked.date === todayISO() : true;
@@ -6490,7 +6500,7 @@ function QueueTrackPage({ clinicId, go }) {
      the truth. Reading my own status off the board means being marked visited
      updates this card instantly, instead of leaving it stuck for ever on
      "3 patients are ahead of you". */
-  const myLive = live && myToken && isToday ? live.tokens.find((row) => row.bookingNumber === myToken) : null;
+  const myLive = live && myToken && isToday ? tokens.find((row) => row.bookingNumber === myToken) : null;
   const myStatus = myLive ? myLive.status : picked ? picked.status : '';
   const isWaiting = myStatus === 'booked';
 
@@ -6554,8 +6564,8 @@ function QueueTrackPage({ clinicId, go }) {
             {live.currentToken ? 'Token ' + live.currentToken + ' is with the doctor' : 'Consultations have not started'}
           </h2>
           <p>
-            {board.clinic.clinicName}
-            {board.clinic.doctorName ? ' - ' + board.clinic.doctorName : ''}
+            {clinicInfo ? clinicInfo.clinicName : ''}
+            {clinicInfo && clinicInfo.doctorName ? ' - ' + clinicInfo.doctorName : ''}
             {live.dateLabel ? ' - ' + live.dateLabel : ''}
           </p>
           <div className="lq-pills">
@@ -6581,7 +6591,7 @@ function QueueTrackPage({ clinicId, go }) {
   ) : null;
 
   const strip =
-    live && live.tokens.length ? (
+    live && tokens.length ? (
       <div className="tk-card">
         <div className="row-between" style={{ marginBottom: 6 }}>
           <div>
@@ -6596,7 +6606,7 @@ function QueueTrackPage({ clinicId, go }) {
           </button>
         </div>
         <div className="tk-strip">
-          {live.tokens.map((row) => (
+          {tokens.map((row) => (
             <div className="lq-cell" key={row.bookingNumber}>
               <div className={pebbleClass(row)} title={'Token ' + row.bookingNumber + ' - ' + row.status}>
                 <span>{row.bookingNumber}</span>
@@ -6610,7 +6620,7 @@ function QueueTrackPage({ clinicId, go }) {
   /* Extracted so the board keeps ONE mount point. It used to live inside two
      mutually exclusive branches, so picking a booking unmounted the whole
      board, replayed its reveal animation and restarted the dial. */
-  const myCard = picked ? (
+  const myCard = picked && live ? (
     <div className="tk-card tk-mine">
       <span className="eyebrow">
         <Icon name="ticket" size={13} /> Your token
