@@ -748,12 +748,21 @@ function loadSocketIo() {
 function useQueueSocket(clinicId, date, onUpdate) {
   const [connected, setConnected] = useState(false);
   const handler = useRef(onUpdate);
-  handler.current = onUpdate;
+
+  /* The callback is parked in a ref from inside an effect rather than during
+     render, so a re-render never tears down a live connection and React
+     StrictMode's double render cannot leave a stale callback behind. */
+  useEffect(() => {
+    handler.current = onUpdate;
+  }, [onUpdate]);
 
   useEffect(() => {
     if (!clinicId) return undefined;
     let socket = null;
     let cancelled = false;
+    const onPush = (payload) => {
+      if (handler.current) handler.current(payload);
+    };
 
     loadSocketIo().then((factory) => {
       if (cancelled || !factory) return;
@@ -762,6 +771,10 @@ function useQueueSocket(clinicId, date, onUpdate) {
         reconnectionDelay: 1200,
         reconnectionDelayMax: 6000,
         timeout: 8000,
+        /* forceNew keeps this hook's socket private. Without it socket.io
+           multiplexes a single shared connection, so unmounting ONE board
+           would disconnect every other board still on screen. */
+        forceNew: true,
       });
       socket.on('connect', () => {
         setConnected(true);
@@ -769,16 +782,14 @@ function useQueueSocket(clinicId, date, onUpdate) {
       });
       socket.on('disconnect', () => setConnected(false));
       socket.on('connect_error', () => setConnected(false));
-      socket.on('queue:update', (payload) => {
-        if (handler.current) handler.current(payload);
-      });
+      socket.on('queue:update', onPush);
     });
 
     return () => {
       cancelled = true;
       setConnected(false);
       if (socket) {
-        socket.off('queue:update');
+        socket.off('queue:update', onPush);
         socket.emit('queue:leave');
         socket.disconnect();
       }
@@ -1755,7 +1766,8 @@ const CSS_QUEUE = `
 .lq-pill b{font-weight:800; font-variant-numeric:tabular-nums}
 
 /* -- live indicator -------------------------------------------------------- */
-.lq-live{display:inline-flex; align-items:center; gap:7px; font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase}
+.lq-live{display:inline-flex; align-items:center; flex-wrap:wrap; row-gap:3px; gap:7px; font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase}
+.lq-ago{text-transform:none; letter-spacing:.04em; font-weight:600; opacity:.78; font-variant-numeric:tabular-nums}
 .lq-dot{width:9px; height:9px; border-radius:50%; flex:none; background:#34d399; animation:lqBlip 1.7s ease-out infinite}
 @keyframes lqBlip{0%{box-shadow:0 0 0 0 rgba(52,211,153,.75)}70%{box-shadow:0 0 0 10px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
 .lq-dot.off{background:var(--light); animation:none}
@@ -1829,6 +1841,8 @@ const CSS_QUEUE = `
 .tk-state.wait{background:#f0f9ff; border:1px solid #bae6fd; color:#075985}
 .tk-state.done{background:#f8fafc; border:1px solid var(--border); color:var(--muted)}
 .tk-state.void{background:#fef2f2; border:1px solid #fecaca; color:var(--red2)}
+.tk-board{display:flex; flex-direction:column; gap:18px; min-width:0}
+.tk-stack{display:flex; flex-direction:column; gap:18px; min-width:0}
 .tk-strip{display:flex; gap:10px; overflow-x:auto; padding:8px 2px 12px}
 .tk-strip .lq-cell{width:62px; flex:none}
 .tk-strip .lq-peb{max-width:62px; font-size:19px; cursor:default}
@@ -2136,11 +2150,8 @@ input,select,textarea,button{max-width:100%}
   .nav-links,.nav-actions{display:none}
   .nav-burger{display:inline-flex}
   .nav-in{gap:12px}
-  /* Fixed 2-up instead of auto-fit: auto-fit lands on 3 columns across a lot
-     of this range, which strands the 4th stat card / leftover analytics
-     tiles alone in a row next to empty cells. 2 columns never strands. */
-  .stat-grid{grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px}
-  .an-grid{grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px}
+  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr)); gap:13px}
+  .an-grid{grid-template-columns:repeat(auto-fit,minmax(min(178px,100%),1fr)); gap:13px}
   .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(78px,100%),1fr)); gap:14px}
   .filters{grid-template-columns:1fr 1fr}
   .filters .input-icon{grid-column:1/-1}
@@ -2532,9 +2543,6 @@ input,select,textarea,button{max-width:100%}
   .filters .input-icon input{min-height:46px; font-size:15px}
   .filters .select{width:100%; min-width:0; min-height:44px}
   .filters > .btn{grid-column:1/-1; width:100%; min-height:44px}
-  /* Status and Quota pair up, but Source is the 3rd (odd) select - without
-     this it lands alone in its row with a dangling empty cell beside it. */
-  .filters > select:nth-of-type(3){grid-column:1/-1}
 
   /* 7h. appointments read as cards with a tidy action grid */
   .tbl tbody tr{padding:13px 14px; border-radius:18px; box-shadow:var(--sh1)}
@@ -2542,13 +2550,9 @@ input,select,textarea,button{max-width:100%}
   .tbl td::before{font-size:10px; padding-top:3px}
   .tbl td.tok{padding-bottom:11px; margin-bottom:3px; border-bottom:1px dashed var(--border2)}
   .tbl td:last-child{padding-bottom:0}
-  /* Flex instead of a rigid 2-col grid: a status with only one action left
-     (e.g. "Revert" on a visited row) was stranded alone next to an empty
-     cell. flex-grow lets a lone button fill the row on its own, while two
-     buttons still split it evenly - no per-status CSS needed either way. */
-  .row-actions{width:100%; display:flex; flex-wrap:wrap; gap:8px; padding-top:11px; border-top:1px solid var(--border2)}
-  .row-actions .btn{flex:1 1 128px; min-height:44px; margin:0; justify-content:center}
-  .row-actions .btn-ghost{flex-basis:100%}
+  .row-actions{width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:11px; border-top:1px solid var(--border2)}
+  .row-actions .btn{width:100%; min-height:44px; margin:0}
+  .row-actions .btn-ghost{grid-column:1/-1}
 
   /* 7i. master admin approve / reject controls */
   .own-actions{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:13px}
@@ -2579,7 +2583,7 @@ input,select,textarea,button{max-width:100%}
   .filters{grid-template-columns:1fr}
   .stat-grid{gap:9px}
   .adm-tabs button{font-size:9.5px; padding:6px 2px 4px; min-height:50px}
-  .own-actions{grid-template-columns:1fr}
+  .row-actions,.own-actions{grid-template-columns:1fr}
 }
 @media (orientation:landscape) and (max-height:560px){
   .adm-tabs{padding:3px 5px calc(3px + env(safe-area-inset-bottom,0px))}
@@ -2598,6 +2602,1357 @@ input,select,textarea,button{max-width:100%}
   .adm-body{padding:0}
   .lq-peb{box-shadow:none; border:1px solid #999; color:#000; background:#fff}
   .lq-peb::before,.lq-peb::after{display:none}
+}
+`;
+
+const CSS_MOBILE_FINAL = `
+/* ============================================================================
+ * FINAL MOBILE APP LAYER
+ *
+ * This layer intentionally redesigns the clinic and master admin screens for
+ * phones instead of trying to squeeze the desktop dashboard into a narrow
+ * viewport. It is concatenated last so these rules win over earlier responsive
+ * rules without changing any React/business logic.
+ * ========================================================================== */
+
+@media (max-width:900px){
+  .adm{
+    display:block;
+    width:100%;
+    min-width:0;
+    min-height:100dvh;
+    overflow:visible;
+  }
+
+  .adm-main{
+    width:100%;
+    min-width:0;
+    max-width:100%;
+    overflow:visible;
+  }
+
+  .adm-top{
+    width:100%;
+    min-width:0;
+    padding:12px var(--pad);
+    gap:10px;
+  }
+
+  .adm-top .row{
+    min-width:0;
+    flex:1 1 100%;
+  }
+
+  .adm-top .row > div{
+    min-width:0;
+    flex:1 1 auto;
+  }
+
+  .adm-top h1,
+  .adm-top .sub{
+    max-width:100%;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  .adm-top .sub{
+    white-space:normal;
+    overflow:visible;
+    text-overflow:clip;
+    line-height:1.4;
+    margin-top:2px;
+  }
+
+  .adm-top-actions{
+    width:100%;
+    min-width:0;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:8px;
+  }
+
+  .adm-top-actions .date-pick{
+    grid-column:1/-1;
+    width:100%;
+    min-width:0;
+    min-height:44px;
+  }
+
+  .adm-top-actions .btn{
+    width:100%;
+    min-width:0;
+    min-height:44px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+
+  .adm-body{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    padding:12px var(--pad) calc(92px + env(safe-area-inset-bottom,0px));
+    gap:14px;
+    overflow:visible;
+  }
+
+  .adm-body > *{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+  }
+
+  /* Every dashboard panel becomes a self-contained mobile surface. */
+  .adm-body .panel,
+  .adm-body .day-group,
+  .adm-body .own-card,
+  .adm-body .stat,
+  .adm-body .an-tile,
+  .adm-body .next-card{
+    max-width:100%;
+    min-width:0;
+  }
+
+  .adm-body .panel{
+    border-radius:18px;
+    box-shadow:0 2px 12px rgba(15,23,42,.055);
+  }
+
+  .adm-body .panel-head{
+    padding:15px 16px;
+    gap:10px;
+    align-items:flex-start;
+  }
+
+  .adm-body .panel-head > div:first-child{
+    min-width:0;
+    flex:1 1 auto;
+  }
+
+  .adm-body .panel-head h3{
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  .adm-body .panel-head .small{
+    line-height:1.45;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .panel-body{
+    padding:15px 16px;
+    min-width:0;
+  }
+
+  /* ------------------------------- overview ------------------------------ */
+  .adm-body .hint-bar{
+    margin:0;
+    padding:11px 12px;
+    font-size:12px;
+    line-height:1.45;
+    align-items:flex-start;
+  }
+
+  .adm-body .stat-grid{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:10px;
+  }
+
+  .adm-body .stat{
+    width:100%;
+    min-height:116px;
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:9px;
+    border-radius:17px;
+  }
+
+  .adm-body .stat-ico{
+    width:34px;
+    height:34px;
+    border-radius:10px;
+  }
+
+  .adm-body .stat-txt{
+    width:100%;
+    min-width:0;
+  }
+
+  .adm-body .stat-txt small{
+    font-size:9.5px;
+    line-height:1.25;
+    letter-spacing:.055em;
+    white-space:normal;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .stat-txt b{
+    font-size:clamp(23px,8vw,30px);
+    line-height:1.05;
+    margin:3px 0;
+  }
+
+  .adm-body .stat-txt > span:not(.tap-cue){
+    display:block;
+    font-size:10.5px;
+    line-height:1.35;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .stat .tap-cue{
+    display:flex;
+    margin-top:5px;
+    font-size:9px;
+    line-height:1.2;
+  }
+
+  .adm-body .next-card{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    align-items:center;
+    gap:10px 12px;
+    padding:16px;
+    border-radius:18px;
+  }
+
+  .adm-body .next-card .nc-txt{
+    min-width:0;
+    width:100%;
+  }
+
+  .adm-body .next-card .nc-txt small{
+    font-size:9.5px;
+    letter-spacing:.12em;
+  }
+
+  .adm-body .next-card .nc-txt p{
+    font-size:12px;
+    line-height:1.4;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .next-card > b{
+    font-size:clamp(34px,11vw,48px);
+    min-width:0;
+  }
+
+  .adm-body .next-card > .btn{
+    grid-column:1/-1;
+    width:100%;
+    min-height:46px;
+  }
+
+  /* Overview progress bars: label and number get their own lines. */
+  .adm-body .bars{
+    gap:16px;
+  }
+
+  .adm-body .bar-row{
+    min-width:0;
+  }
+
+  .adm-body .bar-row .bar-top{
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:3px;
+    font-size:12px;
+    line-height:1.35;
+    margin-bottom:7px;
+  }
+
+  .adm-body .bar-row .bar-top b{
+    max-width:100%;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .bar-track{
+    width:100%;
+  }
+
+  /* ---------------------------- appointment cards ------------------------ */
+  .adm-body .filters{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+    margin-bottom:14px !important;
+  }
+
+  .adm-body .filters .input-icon{
+    grid-column:1/-1;
+    width:100%;
+    min-width:0;
+  }
+
+  .adm-body .filters .input-icon .input{
+    min-height:46px;
+    padding-left:42px;
+    font-size:16px;
+  }
+
+  .adm-body .filters .select,
+  .adm-body .filters > .btn{
+    width:100%;
+    min-width:0;
+    min-height:44px;
+  }
+
+  .adm-body .filters > .btn{
+    grid-column:1/-1;
+  }
+
+  .adm-body .day-stack{
+    width:100%;
+    gap:12px;
+  }
+
+  .adm-body .day-group{
+    border-radius:17px;
+  }
+
+  .adm-body .day-head{
+    padding:13px 14px;
+    gap:9px;
+    align-items:flex-start;
+  }
+
+  .adm-body .day-head h4{
+    min-width:0;
+    flex:1 1 100%;
+    font-size:13px;
+    line-height:1.35;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .day-chips{
+    width:100%;
+    display:flex;
+    gap:5px;
+  }
+
+  .adm-body .day-chip{
+    font-size:9.5px;
+    padding:4px 7px;
+    white-space:normal;
+    line-height:1.25;
+  }
+
+  .adm-body .table-wrap{
+    width:100%;
+    max-width:100%;
+    overflow:visible;
+  }
+
+  .adm-body .tbl{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    display:block;
+    table-layout:fixed;
+  }
+
+  .adm-body .tbl thead{display:none}
+
+  .adm-body .tbl tbody{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    gap:9px;
+  }
+
+  .adm-body .tbl tbody tr{
+    width:100%;
+    min-width:0;
+    display:block;
+    padding:13px;
+    border:1px solid var(--border);
+    border-radius:16px;
+    background:#fff;
+    box-shadow:0 1px 7px rgba(15,23,42,.045);
+  }
+
+  .adm-body .tbl tbody tr:last-child{
+    border-bottom:1px solid var(--border);
+  }
+
+  .adm-body .tbl td{
+    width:100%;
+    min-width:0;
+    display:grid;
+    grid-template-columns:minmax(62px,25%) minmax(0,1fr);
+    align-items:start;
+    gap:10px;
+    padding:6px 0;
+    border:0;
+    text-align:left;
+    overflow:visible;
+  }
+
+  .adm-body .tbl td::before{
+    min-width:0;
+    font-size:9px;
+    line-height:1.3;
+    letter-spacing:.055em;
+    padding-top:2px;
+    text-align:left;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .tbl td > *{
+    min-width:0;
+    max-width:100%;
+  }
+
+  .adm-body .tbl .who,
+  .adm-body .tbl .contact{
+    width:100%;
+    min-width:0;
+    text-align:left;
+  }
+
+  .adm-body .tbl .who b,
+  .adm-body .tbl .who span,
+  .adm-body .tbl .contact b,
+  .adm-body .tbl .contact span{
+    display:block;
+    max-width:100%;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  .adm-body .tbl .tok-chip{
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    font-size:14px;
+  }
+
+  .adm-body .tbl .row-actions{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+    padding-top:10px;
+    margin-top:4px;
+    border-top:1px solid var(--border2);
+  }
+
+  .adm-body .tbl .row-actions .btn{
+    width:100%;
+    min-width:0;
+    min-height:43px;
+    padding:9px 8px;
+    white-space:normal;
+    line-height:1.2;
+  }
+
+  .adm-body .tbl .row-actions .btn-ghost:first-child{
+    grid-column:1/-1;
+  }
+
+  /* ------------------------------- analytics ----------------------------- */
+  .adm-body .an-grid{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:9px;
+  }
+
+  .adm-body .an-tile{
+    min-height:105px;
+    padding:13px;
+    border-radius:15px;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    justify-content:flex-start;
+  }
+
+  .adm-body .an-tile small{
+    font-size:9px;
+    line-height:1.25;
+    margin-bottom:5px;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .an-tile b{
+    font-size:clamp(21px,7vw,27px);
+    line-height:1.05;
+  }
+
+  .adm-body .an-tile p{
+    font-size:10.5px;
+    line-height:1.35;
+    margin-top:4px;
+    overflow-wrap:anywhere;
+  }
+
+  .adm-body .an-tile .tap-cue{
+    margin-top:auto;
+    padding-top:7px;
+    font-size:8.5px;
+  }
+
+  .adm-body .legend{
+    width:100%;
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    font-size:10px;
+  }
+
+  .adm-body .trend{
+    width:100%;
+    height:170px;
+    gap:7px;
+    overflow-x:auto;
+    padding:12px 2px 0;
+  }
+
+  .adm-body .trend-col{
+    flex:0 0 31px;
+    min-width:31px;
+  }
+
+  .adm-body .trend-bar{
+    max-width:25px;
+  }
+
+  .adm-body .trend-lbl{
+    font-size:8.5px;
+  }
+
+  /* ------------------------------- settings ------------------------------ */
+  .adm-body .set-grid{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    min-width:0;
+  }
+
+  .adm-body .set-grid > *{
+    width:100%;
+    min-width:0;
+  }
+
+  .adm-body .set-grid .grid2,
+  .adm-body .set-grid .grid3{
+    width:100%;
+    grid-template-columns:1fr;
+    gap:12px;
+  }
+
+  .adm-body .set-grid .form-grid{
+    gap:13px;
+  }
+
+  .adm-body .set-grid .field{
+    width:100%;
+    min-width:0;
+  }
+
+  .adm-body .set-grid .input,
+  .adm-body .set-grid .select,
+  .adm-body .set-grid .textarea{
+    width:100%;
+    max-width:100%;
+  }
+
+  .adm-body .set-grid .panel-body{
+    padding:15px 16px;
+  }
+
+  .adm-body .copy-row{
+    width:100%;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:start;
+    gap:8px;
+    padding:11px 12px;
+    font-size:11px;
+    line-height:1.45;
+  }
+
+  .adm-body .copy-row .mono{
+    overflow-wrap:anywhere;
+    word-break:break-all;
+  }
+
+  .adm-body .set-grid .panel-body > .row{
+    width:100%;
+    display:grid;
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+
+  .adm-body .set-grid .panel-body > .row .btn{
+    width:100%;
+  }
+
+  .adm-body .set-grid .kv{
+    width:100%;
+    grid-template-columns:minmax(82px,30%) minmax(0,1fr);
+    gap:8px 10px;
+  }
+
+  .adm-body .set-grid .kv dd{
+    min-width:0;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  /* ----------------------------- master admin ---------------------------- */
+  .adm-body .own-bar{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:8px;
+  }
+
+  .adm-body .own-bar .input-icon,
+  .adm-body .own-bar .input-icon .input,
+  .adm-body .own-bar .select,
+  .adm-body .own-bar .own-seg{
+    width:100%;
+    max-width:100% !important;
+    min-width:0;
+  }
+
+  .adm-body .own-bar .input-icon .input{
+    min-height:46px;
+    font-size:16px;
+  }
+
+  .adm-body .own-bar .select{
+    min-height:44px;
+  }
+
+  .adm-body .own-seg{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:4px;
+    padding:4px;
+    border-radius:14px;
+  }
+
+  .adm-body .own-seg button{
+    min-width:0;
+    min-height:42px;
+    padding:8px 7px;
+    justify-content:center;
+  }
+
+  .adm-body .own-grid{
+    width:100%;
+    display:grid;
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+
+  .adm-body .own-card{
+    width:100%;
+    padding:15px;
+    gap:11px;
+    border-radius:17px;
+  }
+
+  .adm-body .own-card-top{
+    width:100%;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    gap:10px;
+    align-items:center;
+  }
+
+  .adm-body .own-card-top .cc-av{
+    width:44px;
+    height:44px;
+    border-radius:12px;
+  }
+
+  .adm-body .own-card-id{
+    min-width:0;
+  }
+
+  .adm-body .own-card-id b,
+  .adm-body .own-card-id span{
+    white-space:normal;
+    overflow:visible;
+    text-overflow:clip;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+    line-height:1.35;
+  }
+
+  .adm-body .own-card-top .own-st{
+    grid-column:1/-1;
+    justify-self:start;
+  }
+
+  .adm-body .own-tags{
+    width:100%;
+    gap:5px;
+  }
+
+  .adm-body .own-tags .badge{
+    max-width:100%;
+    white-space:normal;
+    line-height:1.25;
+  }
+
+  .adm-body .own-meta{
+    width:100%;
+    gap:7px;
+  }
+
+  .adm-body .own-meta div{
+    width:100%;
+    min-width:0;
+    display:grid;
+    grid-template-columns:18px minmax(0,1fr);
+    gap:7px;
+    font-size:11.5px;
+    line-height:1.4;
+  }
+
+  .adm-body .own-meta span{
+    min-width:0;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  .adm-body .own-actions{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+    padding-top:11px;
+    margin-top:0;
+  }
+
+  .adm-body .own-actions .btn{
+    width:100%;
+    min-width:0;
+    min-height:43px;
+    padding:9px 7px;
+    white-space:normal;
+    line-height:1.2;
+  }
+
+  .adm-body .own-actions .btn:last-child:nth-child(odd){
+    grid-column:1/-1;
+  }
+
+  .adm-body .own-note,
+  .adm-body .own-empty{
+    width:100%;
+    max-width:100%;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  /* Mobile section navigation is a fixed thumb-friendly bar. */
+  .adm-tabs{
+    position:fixed;
+    left:0;
+    right:0;
+    bottom:0;
+    z-index:100;
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:2px;
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));
+    margin:0;
+    background:rgba(255,255,255,.97);
+    border-top:1px solid var(--border);
+    box-shadow:0 -8px 24px rgba(15,23,42,.09);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+  }
+
+  .adm-tabs button{
+    width:100%;
+    min-width:0;
+    min-height:54px;
+    padding:6px 2px 5px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:3px;
+    border-radius:13px;
+    font-size:9.5px;
+    line-height:1.15;
+    overflow:hidden;
+  }
+
+  .adm-tabs button span{
+    width:100%;
+    max-width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    text-align:center;
+  }
+
+  .adm-tabs button .ico{
+    width:18px;
+    height:18px;
+  }
+
+  /* Mobile side drawer remains available as a secondary navigation/action area. */
+  .adm-side{
+    width:min(88vw,340px);
+    max-width:340px;
+    padding:18px 15px;
+  }
+}
+
+@media (max-width:600px){
+  :root{--pad:14px}
+
+  .adm-top{
+    padding:10px var(--pad);
+  }
+
+  .adm-top h1{
+    font-size:18px;
+  }
+
+  .adm-top .sub{
+    font-size:11px;
+  }
+
+  .adm-body{
+    padding-left:var(--pad);
+    padding-right:var(--pad);
+    gap:12px;
+  }
+
+  .adm-body .panel-head,
+  .adm-body .panel-body{
+    padding-left:14px;
+    padding-right:14px;
+  }
+
+  .adm-body .stat-grid,
+  .adm-body .an-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+
+  .adm-body .stat{
+    min-height:112px;
+    padding:12px;
+  }
+
+  .adm-body .stat-txt b{
+    font-size:clamp(22px,7.5vw,27px);
+  }
+
+  .adm-body .an-tile{
+    min-height:101px;
+    padding:12px;
+  }
+
+  .adm-body .next-card{
+    padding:14px;
+  }
+
+  .adm-body .tbl td{
+    grid-template-columns:58px minmax(0,1fr);
+    gap:8px;
+  }
+
+  .adm-body .tbl td::before{
+    font-size:8.5px;
+  }
+
+  .adm-body .tbl .row-actions{
+    grid-template-columns:1fr 1fr;
+  }
+
+  .adm-body .day-head h4{
+    font-size:12px;
+  }
+
+  .adm-body .day-chips{
+    gap:4px;
+  }
+
+  .adm-body .day-chip{
+    font-size:8.5px;
+    padding:3px 6px;
+  }
+
+  .adm-tabs button{
+    min-height:52px;
+    font-size:8.8px;
+  }
+}
+
+@media (max-width:380px){
+  .adm-body .stat-grid,
+  .adm-body .an-grid{
+    grid-template-columns:1fr;
+  }
+
+  .adm-body .stat{
+    min-height:98px;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:center;
+    gap:10px;
+  }
+
+  .adm-body .stat-ico{
+    grid-row:1;
+  }
+
+  .adm-body .stat-txt{
+    grid-column:2;
+  }
+
+  .adm-body .stat .tap-cue{
+    display:none;
+  }
+
+  .adm-top-actions{
+    grid-template-columns:1fr;
+  }
+
+  .adm-top-actions .date-pick{
+    grid-column:1;
+  }
+
+  .adm-body .own-actions{
+    grid-template-columns:1fr;
+  }
+
+  .adm-body .tbl .row-actions{
+    grid-template-columns:1fr;
+  }
+
+  .adm-body .tbl .row-actions .btn-ghost:first-child{
+    grid-column:auto;
+  }
+}
+
+@media (orientation:landscape) and (max-height:640px) and (max-width:900px){
+  .adm-body{
+    padding-bottom:80px;
+  }
+
+  .adm-tabs button{
+    min-height:46px;
+    padding-top:4px;
+    padding-bottom:4px;
+  }
+
+  .adm-top{
+    padding-top:8px;
+    padding-bottom:8px;
+  }
+
+  .adm-top-actions{
+    grid-template-columns:repeat(3,minmax(0,1fr));
+  }
+
+  .adm-top-actions .date-pick{
+    grid-column:auto;
+  }
+}
+
+@media (hover:none) and (pointer:coarse) and (max-width:900px){
+  .adm-body .stat,
+  .adm-body .an-tile,
+  .adm-body .own-card{
+    -webkit-tap-highlight-color:transparent;
+  }
+
+  .adm-body .stat.tap:active,
+  .adm-body .an-tile.tap:active,
+  .adm-body .own-card:active{
+    transform:scale(.992);
+  }
+}
+`;
+
+const CSS_MOBILE_PLUS = `
+/* ============================================================================
+ * FINAL MOBILE APP LAYER - PART B
+ *
+ * The layer above redesigns the overview, appointments, analytics, settings
+ * and master-admin surfaces, but it does not reach the live queue board, the
+ * drill-down dialogs, the QR share card, the photo picker or the patient
+ * token page. Those are completed here in the same spirit - phone-first
+ * arrangements instead of a shrunken desktop. Concatenated last.
+ * ========================================================================== */
+
+@media (max-width:900px){
+  /* The section bar adapts to each panel's own tab count (clinic 5, owner 3)
+     instead of assuming a fixed number of columns. */
+  .adm-tabs{
+    grid-template-columns:none;
+    grid-auto-flow:column;
+    grid-auto-columns:minmax(0,1fr);
+  }
+
+  /* ---------------------------- live queue board ------------------------- */
+  .lq-hero{
+    width:100%;
+    min-width:0;
+    padding:16px;
+    border-radius:18px;
+  }
+
+  .lq-hero-in{
+    width:100%;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+    gap:13px;
+  }
+
+  .lq-dial{
+    width:clamp(104px,32vw,128px);
+    height:clamp(104px,32vw,128px);
+    flex:0 0 auto;
+  }
+
+  .lq-hero-txt{
+    width:100%;
+    min-width:0;
+  }
+
+  .lq-hero-txt h2{
+    font-size:clamp(19px,5.6vw,25px);
+    line-height:1.2;
+    overflow-wrap:anywhere;
+  }
+
+  .lq-hero-txt p{
+    font-size:12px;
+    line-height:1.45;
+    overflow-wrap:anywhere;
+  }
+
+  .lq-pills{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+
+  .lq-pill{
+    width:100%;
+    min-width:0;
+    min-height:44px;
+    justify-content:center;
+    text-align:center;
+    font-size:11.5px;
+    line-height:1.25;
+    overflow-wrap:anywhere;
+  }
+
+  .lq-pills > :last-child:nth-child(odd){
+    grid-column:1/-1;
+  }
+
+  .lq-bar{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:12px;
+  }
+
+  .lq-legend{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px 10px;
+    font-size:11px;
+  }
+
+  .lq-key{
+    min-width:0;
+    overflow-wrap:anywhere;
+  }
+
+  .lq-bar .row{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+
+  .lq-toggle{
+    width:100%;
+    min-width:0;
+    min-height:44px;
+    justify-content:center;
+    font-size:11.5px;
+    line-height:1.2;
+  }
+
+  .lq-pad{
+    width:100%;
+    grid-template-columns:repeat(auto-fill,minmax(70px,1fr));
+    gap:10px;
+  }
+
+  .lq-peb{
+    max-width:88px;
+    font-size:clamp(15px,4.6vw,19px);
+  }
+
+  /* Pointer rings must not bleed into the neighbouring pebble once the grid
+     gap shrinks on a phone. */
+  .lq-peb.next{outline-width:2px; outline-offset:3px}
+
+  .lq-peb.mine{outline-width:3px; outline-offset:3px}
+
+  .lq-cap{
+    display:-webkit-box;
+    -webkit-line-clamp:2;
+    -webkit-box-orient:vertical;
+    white-space:normal;
+    overflow:hidden;
+    font-size:10px;
+    line-height:1.25;
+    overflow-wrap:anywhere;
+  }
+
+  .lq-tip{
+    font-size:11px;
+    line-height:1.45;
+    overflow-wrap:anywhere;
+  }
+
+  /* ------------------- dialogs opened from the panels -------------------- */
+  .modal-body .table-wrap{overflow:visible}
+
+  .modal-body .tbl{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    display:block;
+    table-layout:fixed;
+  }
+
+  .modal-body .tbl thead{display:none}
+
+  .modal-body .tbl tbody{
+    display:flex;
+    flex-direction:column;
+    gap:9px;
+  }
+
+  .modal-body .tbl tbody tr{
+    width:100%;
+    min-width:0;
+    display:block;
+    padding:12px;
+    border:1px solid var(--border);
+    border-radius:15px;
+  }
+
+  .modal-body .tbl td{
+    width:100%;
+    min-width:0;
+    display:grid;
+    grid-template-columns:minmax(58px,26%) minmax(0,1fr);
+    align-items:start;
+    gap:9px;
+    padding:6px 0;
+    border:0;
+    text-align:left;
+  }
+
+  .modal-body .tbl td::before{
+    font-size:9px;
+    letter-spacing:.055em;
+    text-align:left;
+    padding-top:2px;
+  }
+
+  .modal-body .tbl td > *{
+    min-width:0;
+    max-width:100%;
+  }
+
+  .modal-body .tbl .who b,
+  .modal-body .tbl .who span,
+  .modal-body .tbl .contact b,
+  .modal-body .tbl .contact span{
+    display:block;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  .modal-body .tbl .row-actions{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+  }
+
+  .modal-body .tbl .row-actions .btn{
+    width:100%;
+    min-width:0;
+    min-height:42px;
+    white-space:normal;
+    line-height:1.2;
+  }
+
+  .modal-body .grid2,
+  .modal-body .grid3{
+    grid-template-columns:1fr;
+  }
+
+  .modal-body .kv{
+    grid-template-columns:minmax(82px,32%) minmax(0,1fr);
+  }
+
+  .modal-body .kv dd{
+    min-width:0;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  /* --------------------- QR share card + photo picker -------------------- */
+  .qrc-wrap{
+    width:100%;
+    flex-direction:column;
+    align-items:stretch;
+    gap:14px;
+  }
+
+  .qrc{
+    width:100%;
+    max-width:340px;
+    margin:0 auto;
+  }
+
+  .qrc-side{
+    width:100%;
+    min-width:0;
+  }
+
+  .qrc-side .btn{
+    width:100%;
+    min-height:44px;
+  }
+
+  .qrc-url{
+    overflow-wrap:anywhere;
+    word-break:break-all;
+  }
+
+  .up-thumb{
+    width:64px;
+    height:64px;
+    flex:0 0 64px;
+  }
+
+  .up-body{
+    min-width:0;
+  }
+
+  .up-actions{
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+  }
+
+  .up-actions .btn{
+    width:100%;
+    min-width:0;
+    min-height:42px;
+  }
+
+  /* ---------------------- patient live token page ------------------------ */
+  .tk-card{min-width:0}
+
+  .tk-ring{
+    width:clamp(132px,42vw,168px);
+    height:clamp(132px,42vw,168px);
+  }
+
+  .tk-strip{
+    width:100%;
+    max-width:100%;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+
+  .tk-eta{overflow-wrap:anywhere}
+
+  /* The action row owns the whole card: the label column would otherwise
+     steal a quarter of the width behind a caption nobody needs to read. */
+  .adm-body .tbl td[data-label='Actions'],
+  .modal-body .tbl td[data-label='Actions']{
+    display:block;
+    padding:0;
+  }
+
+  .adm-body .tbl td[data-label='Actions']::before,
+  .modal-body .tbl td[data-label='Actions']::before{
+    display:none;
+  }
+}
+
+@media (max-width:600px){
+  .lq-pad{
+    grid-template-columns:repeat(auto-fill,minmax(62px,1fr));
+    gap:9px;
+  }
+
+  .lq-peb{max-width:78px}
+
+  .qrc{max-width:100%}
+
+  .modal-body .tbl td{grid-template-columns:56px minmax(0,1fr)}
+}
+
+@media (max-width:380px){
+  .lq-pills,
+  .lq-legend,
+  .lq-bar .row{
+    grid-template-columns:1fr;
+  }
+
+  .lq-pad{
+    grid-template-columns:repeat(auto-fill,minmax(56px,1fr));
+    gap:8px;
+  }
+
+  .up-actions,
+  .modal-body .tbl .row-actions{
+    grid-template-columns:1fr;
+  }
+}
+
+/* A column-direction footer measures flex-basis on the vertical axis, so a
+   percentage basis inflates dialog buttons instead of splitting them. */
+@media (max-width:420px){
+  .modal-foot .btn{
+    flex:0 0 auto;
+    width:100%;
+    min-width:0;
+  }
 }
 `;
 
@@ -2622,7 +3977,7 @@ function injectStyles() {
   if (existing) existing.remove();
   const tag = document.createElement('style');
   tag.id = 'mcf-styles';
-  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_MEDIA + CSS_RESP;
+  tag.textContent = CSS_BASE + CSS_SITE + CSS_ADMIN + CSS_QUEUE + CSS_OWNER + CSS_MEDIA + CSS_RESP + CSS_MOBILE_FINAL + CSS_MOBILE_PLUS;
   document.head.appendChild(tag);
   stylesInjected = true;
 }
@@ -4951,6 +6306,38 @@ function ForgotPage({ go, notify, onSession }) {
  * mobile or booking ID, then followed live against the clinic queue
  * ========================================================================== */
 
+/* Two deliberately tiny self-ticking components. The tracking page used to
+   hold a page-level 1-second timer, which re-rendered EVERYTHING once a second
+   - the lookup form, the full clinic list, the ring, every pebble - and made
+   the board shimmer and stutter on a phone. Now only the text that actually
+   changes re-renders on a timer. */
+function AgoBadge({ beat }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (!beat) return undefined;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [beat]);
+
+  if (!beat) return null;
+  const secs = Math.max(0, Math.round((now - beat) / 1000));
+  return <span className="lq-ago">{'- updated ' + (secs < 60 ? secs + 's ago' : Math.floor(secs / 60) + 'm ago')}</span>;
+}
+
+function EtaClock({ minutes }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 20000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const at = new Date(now + Math.max(0, Number(minutes) || 0) * 60000);
+  return <b>{at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b>;
+}
+
 function QueueTrackPage({ clinicId, go }) {
   const [mode, setMode] = useState('mobile');
   const [value, setValue] = useState('');
@@ -4963,8 +6350,17 @@ function QueueTrackPage({ clinicId, go }) {
   const [boardBusy, setBoardBusy] = useState(false);
   const [error, setError] = useState('');
   const [auto, setAuto] = useState(true);
-  const [tick, setTick] = useState(Date.now());
   const [beat, setBeat] = useState(0);
+
+  /* THE LIVE-BOARD GLITCH FIX. Three writers feed this board: the first load,
+     the safety-net poll, and the realtime push. A poll that left before the
+     doctor called a token can easily land AFTER the push that announced it,
+     repainting the screen with older data - which is exactly why "Now serving"
+     jumped backwards and the pebbles flickered. reqRef drops out-of-order
+     responses and stampRef refuses any snapshot older than the one on screen. */
+  const reqRef = useRef(0);
+  const stampRef = useRef('');
+  const clinicRef = useRef('');
 
   /* A tracked booking wins over a browsed clinic board, and it also pins the
      board to that booking's date so an old token is never compared against
@@ -4978,40 +6374,75 @@ function QueueTrackPage({ clinicId, go }) {
     });
   }, []);
 
+  /* Single funnel for every source of truth, so ordering is enforced in one
+     place. The server stamps each snapshot with serverTime, which makes this a
+     plain monotonic check. */
+  const applyLive = useCallback((nextLive, clinic) => {
+    if (!nextLive) return false;
+    const stamp = String(nextLive.serverTime || '');
+    if (stamp && stampRef.current && stamp < stampRef.current) return false;
+    if (stamp) stampRef.current = stamp;
+    setBoard((prev) => {
+      const base = clinic ? { success: true, clinic: clinic } : prev;
+      if (!base) return prev;
+      return Object.assign({}, base, { live: nextLive });
+    });
+    setBeat(Date.now());
+    return true;
+  }, []);
+
   const loadBoard = useCallback(
     async (silent) => {
       if (!tClinic) return undefined;
+      const seq = reqRef.current + 1;
+      reqRef.current = seq;
       if (!silent) setBoardBusy(true);
       const query = tDate ? '?date=' + encodeURIComponent(tDate) : '';
       const data = await api('/clinics/' + encodeURIComponent(tClinic) + '/live' + query);
+      if (seq !== reqRef.current) return undefined;
       if (!silent) setBoardBusy(false);
       if (!data.success) {
         setError(data.message);
-        setBoard(null);
+        if (!silent) setBoard(null);
         return undefined;
       }
       setError('');
-      setBoard(data);
-      setBeat(Date.now());
+      applyLive(data.live, data.clinic);
       return undefined;
     },
-    [tClinic, tDate]
+    [tClinic, tDate, applyLive]
   );
 
+  /* Only a genuine clinic switch blanks the board. Picking one of your own
+     bookings merely re-dates the same queue, so the board now refreshes in
+     place instead of unmounting, flashing a loader and fading back in. */
   useEffect(() => {
-    setBoard(null);
+    stampRef.current = '';
+    if (clinicRef.current !== tClinic) {
+      clinicRef.current = tClinic;
+      setBoard(null);
+      setBeat(0);
+    }
     loadBoard(false);
-  }, [loadBoard]);
+  }, [loadBoard, tClinic]);
 
   /* REALTIME. The clinic pushes a new board the instant a token is called, so
      the patient's screen moves without waiting for any timer. The pushed
      payload is already exactly the public board shape, so it is applied
      DIRECTLY - no refetch round trip, no flicker. */
-  const socketLive = useQueueSocket(tClinic, tDate, (payload) => {
-    if (!payload || !payload.live) return;
-    setBoard((prev) => (prev ? Object.assign({}, prev, { live: payload.live }) : prev));
-    setBeat(Date.now());
-  });
+  const onPush = useCallback(
+    (payload) => {
+      if (!payload || !payload.live) return;
+      /* Ignore anything addressed to another clinic or another day, so a
+         cross-room push can never repaint a pinned board. */
+      if (payload.clinicId && payload.clinicId !== tClinic) return;
+      if (tDate && payload.date && payload.date !== tDate) return;
+      applyLive(payload.live);
+    },
+    [applyLive, tClinic, tDate]
+  );
+
+  const socketLive = useQueueSocket(tClinic, tDate, onPush);
 
   /* Polling stays as a safety net for sleeping phones, flaky proxies, and any
      deployment where socket.io is not installed on the backend. */
@@ -5020,11 +6451,6 @@ function QueueTrackPage({ clinicId, go }) {
     const id = window.setInterval(() => loadBoard(true), socketLive ? 45000 : 15000);
     return () => window.clearInterval(id);
   }, [auto, tClinic, loadBoard, socketLive]);
-
-  useEffect(() => {
-    const id = window.setInterval(() => setTick(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -5058,9 +6484,15 @@ function QueueTrackPage({ clinicId, go }) {
       ? live.tokens.filter((row) => row.status === 'booked' && row.bookingNumber < myToken).length
       : 0;
   const etaMin = ahead * pace;
-  const etaAt = new Date(tick + etaMin * 60000);
-  const agoSec = beat ? Math.max(0, Math.round((tick - beat) / 1000)) : 0;
   const isToday = picked ? picked.date === todayISO() : true;
+
+  /* The looked-up row is frozen at the moment of the search; the live board is
+     the truth. Reading my own status off the board means being marked visited
+     updates this card instantly, instead of leaving it stuck for ever on
+     "3 patients are ahead of you". */
+  const myLive = live && myToken && isToday ? live.tokens.find((row) => row.bookingNumber === myToken) : null;
+  const myStatus = myLive ? myLive.status : picked ? picked.status : '';
+  const isWaiting = myStatus === 'booked';
 
   const startAhead = myToken ? Math.max(1, myToken - 1) : 1;
   const ringPct = myToken ? Math.max(0, Math.min(100, Math.round(((startAhead - ahead) / startAhead) * 100))) : 0;
@@ -5068,10 +6500,10 @@ function QueueTrackPage({ clinicId, go }) {
   let state = 'wait';
   let stateMsg = '';
   if (picked) {
-    if (picked.status === 'cancelled') {
+    if (myStatus === 'cancelled') {
       state = 'void';
       stateMsg = 'This booking was cancelled. Please book a fresh appointment.';
-    } else if (picked.status === 'visited') {
+    } else if (myStatus === 'visited') {
       state = 'done';
       stateMsg = 'Token ' + myToken + ' has already been seen by the doctor.';
     } else if (!isToday) {
@@ -5093,7 +6525,8 @@ function QueueTrackPage({ clinicId, go }) {
 
   const pebbleClass = (row) => {
     const bits = ['lq-peb'];
-    if (row.status === 'cancelled') bits.push('void');
+    if (row.status === 'empty' || !row.status) bits.push('gap');
+    else if (row.status === 'cancelled') bits.push('void');
     else if (row.status === 'visited') bits.push('done');
     else if (row.quota === 'Emergency') bits.push('emg');
     else bits.push('wait');
@@ -5115,7 +6548,7 @@ function QueueTrackPage({ clinicId, go }) {
           <span className="lq-live">
             <span className={'lq-dot' + (auto ? '' : ' off')} />
             {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
-            {beat ? ' - updated ' + agoSec + 's ago' : ''}
+            <AgoBadge beat={beat} />
           </span>
           <h2 style={{ marginTop: 8 }}>
             {live.currentToken ? 'Token ' + live.currentToken + ' is with the doctor' : 'Consultations have not started'}
@@ -5173,6 +6606,66 @@ function QueueTrackPage({ clinicId, go }) {
         </div>
       </div>
     ) : null;
+
+  /* Extracted so the board keeps ONE mount point. It used to live inside two
+     mutually exclusive branches, so picking a booking unmounted the whole
+     board, replayed its reveal animation and restarted the dial. */
+  const myCard = picked ? (
+    <div className="tk-card tk-mine">
+      <span className="eyebrow">
+        <Icon name="ticket" size={13} /> Your token
+      </span>
+      <div className="tk-ring" style={{ '--p': ringPct }}>
+        <div className="tk-ring-in">
+          <b>{String(myToken).padStart(2, '0')}</b>
+          <small>{picked.quota}</small>
+        </div>
+      </div>
+
+      <h3 style={{ fontSize: 18, margin: '0 0 4px' }}>{picked.name}</h3>
+      <p className="small muted" style={{ margin: 0 }}>
+        {picked.clinicName} - {picked.dateLabel}
+      </p>
+
+      <div className="tk-eta">
+        <div>
+          <b>{live.currentToken || '--'}</b>
+          <small>Now serving</small>
+        </div>
+        <div>
+          <b>{isWaiting && isToday ? ahead : '--'}</b>
+          <small>Ahead of you</small>
+        </div>
+        <div>
+          <b>
+            {isWaiting && isToday
+              ? etaMin === 0
+                ? 'Now'
+                : '~' + etaMin + 'm'
+              : '--'}
+          </b>
+          <small>Your turn</small>
+        </div>
+      </div>
+
+      <div className={'tk-state ' + state}>
+        <Icon
+          name={state === 'turn' ? 'spark' : state === 'void' ? 'ban' : state === 'done' ? 'check' : 'clock'}
+          size={17}
+        />
+        <span>{stateMsg}</span>
+      </div>
+
+      {isWaiting && isToday && etaMin > 0 ? (
+        <p className="small muted" style={{ marginTop: 12 }}>
+          Estimated call time around{' '}
+          <EtaClock minutes={etaMin} />, based on{' '}
+          {live.paceSamples ? 'the doctor averaging ' + pace + ' min per patient today' : 'a ' + pace + ' min average'}.
+          Please arrive earlier, since emergency cases can move the queue.
+        </p>
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <div className="container pg" style={{ padding: '34px 22px 80px' }}>
@@ -5308,83 +6801,22 @@ function QueueTrackPage({ clinicId, go }) {
 
       {boardBusy && !board ? <Loading label="Loading the live queue" /> : null}
 
-      {picked && live ? (
+      {live ? (
         <Reveal>
-          <div className="tk-grid">
-            <div className="tk-card tk-mine">
-              <span className="eyebrow">
-                <Icon name="ticket" size={13} /> Your token
-              </span>
-              <div className="tk-ring" style={{ '--p': ringPct }}>
-                <div className="tk-ring-in">
-                  <b>{String(myToken).padStart(2, '0')}</b>
-                  <small>{picked.quota}</small>
-                </div>
-              </div>
-
-              <h3 style={{ fontSize: 18, margin: '0 0 4px' }}>{picked.name}</h3>
-              <p className="small muted" style={{ margin: 0 }}>
-                {picked.clinicName} - {picked.dateLabel}
-              </p>
-
-              <div className="tk-eta">
-                <div>
-                  <b>{live.currentToken || '--'}</b>
-                  <small>Now serving</small>
-                </div>
-                <div>
-                  <b>{picked.status === 'booked' && isToday ? ahead : '--'}</b>
-                  <small>Ahead of you</small>
-                </div>
-                <div>
-                  <b>
-                    {picked.status === 'booked' && isToday
-                      ? etaMin === 0
-                        ? 'Now'
-                        : '~' + etaMin + 'm'
-                      : '--'}
-                  </b>
-                  <small>Your turn</small>
-                </div>
-              </div>
-
-              <div className={'tk-state ' + state}>
-                <Icon
-                  name={state === 'turn' ? 'spark' : state === 'void' ? 'ban' : state === 'done' ? 'check' : 'clock'}
-                  size={17}
-                />
-                <span>{stateMsg}</span>
-              </div>
-
-              {picked.status === 'booked' && isToday && etaMin > 0 ? (
-                <p className="small muted" style={{ marginTop: 12 }}>
-                  Estimated call time around{' '}
-                  <b>{etaAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b>, based on{' '}
-                  {live.paceSamples ? 'the doctor averaging ' + pace + ' min per patient today' : 'a ' + pace + ' min average'}.
-                  Please arrive earlier, since emergency cases can move the queue.
-                </p>
-              ) : null}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div className={picked ? 'tk-grid' : 'tk-stack'}>
+            {myCard}
+            <div className="tk-board">
               {liveHero}
               {strip}
-            </div>
-          </div>
-        </Reveal>
-      ) : null}
-
-      {!picked && live ? (
-        <Reveal>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            {liveHero}
-            {strip}
-            <div className="lq-tip">
-              <Icon name="spark" size={16} />
-              <span>
-                Want your own position and a time estimate? Enter the mobile number you booked with above and this board
-                will follow your token instead.
-              </span>
+              {picked ? null : (
+                <div className="lq-tip">
+                  <Icon name="spark" size={16} />
+                  <span>
+                    Want your own position and a time estimate? Enter the mobile number you booked with above and this
+                    board will follow your token instead.
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </Reveal>
@@ -5584,16 +7016,12 @@ function AdminDashboard({ routeClinicId, go, notify }) {
 
   if (loading && !clinic) return <Loading label="Opening your dashboard" />;
 
-  /* 4th item is the short label used only by the phone bottom tab bar, which
-     has ~70px per tab on a 375px screen - "Live queue status" and "Clinic
-     settings" do not fit that at a legible size and were being clipped with
-     an ellipsis. The sidebar and the page <h1> keep the full label. */
   const tabs = [
-    ['overview', 'Overview', 'grid', 'Overview'],
-    ['queue', 'Live queue status', 'activity', 'Queue'],
-    ['appointments', 'Appointments', 'list', 'Appts'],
-    ['analytics', 'Analytics', 'chart', 'Analytics'],
-    ['settings', 'Clinic settings', 'settings', 'Settings'],
+    ['overview', 'Overview', 'grid'],
+    ['queue', 'Live queue status', 'activity'],
+    ['appointments', 'Appointments', 'list'],
+    ['analytics', 'Analytics', 'chart'],
+    ['settings', 'Clinic settings', 'settings'],
   ];
 
   const dayLabel = stats ? stats.dateLabel : fmtDate(date);
@@ -5818,10 +7246,10 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         {/* Phones get the sections as a swipeable strip, so the five tabs are
             one tap away instead of behind the drawer. Hidden above 900px. */}
         <nav className="adm-tabs" aria-label="Dashboard sections">
-          {tabs.map(([id, label, icon, short]) => (
-            <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)} title={label} aria-label={label}>
+          {tabs.map(([id, label, icon]) => (
+            <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
               <Icon name={icon} size={16} />
-              <span>{short || label}</span>
+              <span>{label}</span>
             </button>
           ))}
         </nav>
@@ -6379,16 +7807,29 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
   const [names, setNames] = useState(true);
   const [beat, setBeat] = useState(0);
 
+  /* Marking a token fires BOTH a direct refetch and a Socket.IO broadcast, so
+     two responses can land out of order and flip a pebble back to its previous
+     colour for a moment. Same fix as the patient board: keep only the newest
+     request, and never paint a snapshot older than the one already shown. */
+  const reqRef = useRef(0);
+  const stampRef = useRef('');
+
   const load = useCallback(
     async (silent) => {
+      const seq = reqRef.current + 1;
+      reqRef.current = seq;
       if (!silent) setLoading(true);
       const data = await api('/admin/queue?date=' + encodeURIComponent(date), { auth: true });
+      if (seq !== reqRef.current) return undefined;
       if (!silent) setLoading(false);
       if (!data.success) {
         if (data.unauthorized) return onExpired();
         setError(data.message);
         return undefined;
       }
+      const stamp = data.live && data.live.serverTime ? String(data.live.serverTime) : '';
+      if (stamp && stampRef.current && stamp < stampRef.current) return undefined;
+      if (stamp) stampRef.current = stamp;
       setError('');
       setTokens(data.tokens || []);
       setLive(data.live || null);
@@ -6499,6 +7940,7 @@ function LiveQueueTab({ clinicId, date, setDate, notify, onExpired, onChanged })
             <span className="lq-live">
               <span className={'lq-dot' + (auto ? '' : ' off')} />
               {socketLive ? 'Live - realtime' : auto ? 'Live - polling' : 'Paused'}
+              <AgoBadge beat={beat} />
             </span>
             <h2 style={{ marginTop: 8 }}>
               {current ? 'Token ' + current + ' is with the doctor' : 'No token called yet'}
