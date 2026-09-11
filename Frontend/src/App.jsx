@@ -2136,8 +2136,11 @@ input,select,textarea,button{max-width:100%}
   .nav-links,.nav-actions{display:none}
   .nav-burger{display:inline-flex}
   .nav-in{gap:12px}
-  .stat-grid{grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr)); gap:13px}
-  .an-grid{grid-template-columns:repeat(auto-fit,minmax(min(178px,100%),1fr)); gap:13px}
+  /* Fixed 2-up instead of auto-fit: auto-fit lands on 3 columns across a lot
+     of this range, which strands the 4th stat card / leftover analytics
+     tiles alone in a row next to empty cells. 2 columns never strands. */
+  .stat-grid{grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px}
+  .an-grid{grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px}
   .lq-pad{grid-template-columns:repeat(auto-fill,minmax(min(78px,100%),1fr)); gap:14px}
   .filters{grid-template-columns:1fr 1fr}
   .filters .input-icon{grid-column:1/-1}
@@ -2529,6 +2532,9 @@ input,select,textarea,button{max-width:100%}
   .filters .input-icon input{min-height:46px; font-size:15px}
   .filters .select{width:100%; min-width:0; min-height:44px}
   .filters > .btn{grid-column:1/-1; width:100%; min-height:44px}
+  /* Status and Quota pair up, but Source is the 3rd (odd) select - without
+     this it lands alone in its row with a dangling empty cell beside it. */
+  .filters > select:nth-of-type(3){grid-column:1/-1}
 
   /* 7h. appointments read as cards with a tidy action grid */
   .tbl tbody tr{padding:13px 14px; border-radius:18px; box-shadow:var(--sh1)}
@@ -2536,9 +2542,13 @@ input,select,textarea,button{max-width:100%}
   .tbl td::before{font-size:10px; padding-top:3px}
   .tbl td.tok{padding-bottom:11px; margin-bottom:3px; border-bottom:1px dashed var(--border2)}
   .tbl td:last-child{padding-bottom:0}
-  .row-actions{width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:11px; border-top:1px solid var(--border2)}
-  .row-actions .btn{width:100%; min-height:44px; margin:0}
-  .row-actions .btn-ghost{grid-column:1/-1}
+  /* Flex instead of a rigid 2-col grid: a status with only one action left
+     (e.g. "Revert" on a visited row) was stranded alone next to an empty
+     cell. flex-grow lets a lone button fill the row on its own, while two
+     buttons still split it evenly - no per-status CSS needed either way. */
+  .row-actions{width:100%; display:flex; flex-wrap:wrap; gap:8px; padding-top:11px; border-top:1px solid var(--border2)}
+  .row-actions .btn{flex:1 1 128px; min-height:44px; margin:0; justify-content:center}
+  .row-actions .btn-ghost{flex-basis:100%}
 
   /* 7i. master admin approve / reject controls */
   .own-actions{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:13px}
@@ -2569,7 +2579,7 @@ input,select,textarea,button{max-width:100%}
   .filters{grid-template-columns:1fr}
   .stat-grid{gap:9px}
   .adm-tabs button{font-size:9.5px; padding:6px 2px 4px; min-height:50px}
-  .row-actions,.own-actions{grid-template-columns:1fr}
+  .own-actions{grid-template-columns:1fr}
 }
 @media (orientation:landscape) and (max-height:560px){
   .adm-tabs{padding:3px 5px calc(3px + env(safe-area-inset-bottom,0px))}
@@ -5574,12 +5584,16 @@ function AdminDashboard({ routeClinicId, go, notify }) {
 
   if (loading && !clinic) return <Loading label="Opening your dashboard" />;
 
+  /* 4th item is the short label used only by the phone bottom tab bar, which
+     has ~70px per tab on a 375px screen - "Live queue status" and "Clinic
+     settings" do not fit that at a legible size and were being clipped with
+     an ellipsis. The sidebar and the page <h1> keep the full label. */
   const tabs = [
-    ['overview', 'Overview', 'grid'],
-    ['queue', 'Live queue status', 'activity'],
-    ['appointments', 'Appointments', 'list'],
-    ['analytics', 'Analytics', 'chart'],
-    ['settings', 'Clinic settings', 'settings'],
+    ['overview', 'Overview', 'grid', 'Overview'],
+    ['queue', 'Live queue status', 'activity', 'Queue'],
+    ['appointments', 'Appointments', 'list', 'Appts'],
+    ['analytics', 'Analytics', 'chart', 'Analytics'],
+    ['settings', 'Clinic settings', 'settings', 'Settings'],
   ];
 
   const dayLabel = stats ? stats.dateLabel : fmtDate(date);
@@ -5804,10 +5818,10 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         {/* Phones get the sections as a swipeable strip, so the five tabs are
             one tap away instead of behind the drawer. Hidden above 900px. */}
         <nav className="adm-tabs" aria-label="Dashboard sections">
-          {tabs.map(([id, label, icon]) => (
-            <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+          {tabs.map(([id, label, icon, short]) => (
+            <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)} title={label} aria-label={label}>
               <Icon name={icon} size={16} />
-              <span>{label}</span>
+              <span>{short || label}</span>
             </button>
           ))}
         </nav>
