@@ -5296,8 +5296,9 @@ function PatientFields({ form, set, dates = [], walkIn = false }) {
             >
               {dates.length ? null : <option value="">Loading dates...</option>}
               {dates.map((item) => (
-                <option key={item.value} value={item.value}>
+                <option key={item.value} value={item.value} disabled={item.off}>
                   {item.label}
+                  {item.off ? " — Clinic closed" : ""}
                 </option>
               ))}
             </select>
@@ -5446,6 +5447,7 @@ function OtpBoxes({ value, onChange, disabled = false }) {
 function BookingPage({ clinicId, go, notify }) {
   const [clinic, setClinic] = useState(null);
   const [dates, setDates] = useState([]);
+  const [notices, setNotices] = useState([]);
   const [fatal, setFatal] = useState("");
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -5472,13 +5474,19 @@ function BookingPage({ clinicId, go, notify }) {
         return;
       }
       const list = Array.isArray(data.dates) ? data.dates : [];
+      const firstOpen = list.find((item) => !item.off);
       setClinic(data.clinic);
       setDates(list);
+      setNotices(Array.isArray(data.notices) ? data.notices : []);
       setForm((current) => ({
         ...current,
         date:
           current.date ||
-          (list.length ? list[0].value : data.today || todayISO()),
+          (firstOpen
+            ? firstOpen.value
+            : list.length
+              ? list[0].value
+              : data.today || todayISO()),
       }));
     })();
     return () => {
@@ -5571,12 +5579,17 @@ function BookingPage({ clinicId, go, notify }) {
   };
 
   const bookAnother = () => {
+    const firstOpen = dates.find((item) => !item.off);
     setResult(null);
     setOtp("");
     setError("");
     setForm({
       ...EMPTY_FORM,
-      date: dates.length ? dates[0].value : todayISO(),
+      date: firstOpen
+        ? firstOpen.value
+        : dates.length
+          ? dates[0].value
+          : todayISO(),
     });
     setOtpMode(false);
     setStep(1);
@@ -5676,6 +5689,30 @@ function BookingPage({ clinicId, go, notify }) {
               issued as soon as you submit the form.
             </p>
           </div>
+
+          {notices.length ? (
+            <div className="panel" style={{ marginBottom: 16 }}>
+              <div className="panel-head">
+                <div>
+                  <span className="eyebrow">
+                    <Icon name="alert" size={13} /> Notice board
+                  </span>
+                </div>
+              </div>
+              <div className="panel-body stack">
+                {notices.map((n) => (
+                  <div key={n.id}>
+                    <p style={{ margin: 0 }}>{n.message}</p>
+                    <span className="small muted">
+                      {n.always
+                        ? "Always shown"
+                        : "Shown until " + fmtLongDate(n.until)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="steps">
             {stepLabels.map((label, index) => {
@@ -7713,6 +7750,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
     ["queue", "Live queue status", "activity"],
     ["appointments", "Appointments", "list"],
     ["analytics", "Analytics", "chart"],
+    ["notices", "Notices & leave", "alert"],
     ["settings", "Clinic settings", "settings"],
   ];
 
@@ -8715,6 +8753,15 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : null}
 
           {/* ------------------------------------------------------ settings */}
+          {tab === "notices" && clinic ? (
+            <NoticesTab
+              notify={notify}
+              onExpired={() =>
+                signOut("Your session expired. Please sign in again.")
+              }
+            />
+          ) : null}
+
           {tab === "settings" && clinic ? (
             <SettingsTab
               clinic={clinic}
@@ -10195,6 +10242,439 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
     </div>
   );
 }
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function NoticesTab({ notify, onExpired }) {
+  const [dates, setDates] = useState([]);
+  const [weeklyOff, setWeeklyOff] = useState([]);
+  const [notices, setNotices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyDate, setBusyDate] = useState("");
+  const [busyDay, setBusyDay] = useState(false);
+  const [publishFor, setPublishFor] = useState({});
+  const [noticeForm, setNoticeForm] = useState({
+    message: "",
+    until: "",
+    always: false,
+  });
+  const [noticeBusy, setNoticeBusy] = useState(false);
+  const [noticeError, setNoticeError] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editForm, setEditForm] = useState({
+    message: "",
+    until: "",
+    always: false,
+  });
+  const [editBusy, setEditBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const data = await api("/admin/leave", { auth: true });
+      if (!alive) return;
+      if (data.unauthorized) {
+        onExpired();
+        return;
+      }
+      if (!data.success) {
+        setError(data.message);
+        setLoading(false);
+        return;
+      }
+      setDates(data.dates || []);
+      setWeeklyOff(data.weeklyOff || []);
+      setNotices(data.notices || []);
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [onExpired]);
+
+  const toggleLeave = async (date, off) => {
+    setBusyDate(date);
+    const data = await api("/admin/leave/" + encodeURIComponent(date), {
+      method: "PUT",
+      auth: true,
+      body: { off, publishNotice: Boolean(publishFor[date]) },
+    });
+    setBusyDate("");
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setDates(data.dates || dates);
+    setNotices(data.notices || notices);
+    notify(data.message, "ok");
+  };
+
+  const toggleWeeklyDay = async (day) => {
+    const next = weeklyOff.includes(day)
+      ? weeklyOff.filter((d) => d !== day)
+      : [...weeklyOff, day];
+    setBusyDay(true);
+    const data = await api("/admin/weekly-off", {
+      method: "PUT",
+      auth: true,
+      body: { days: next },
+    });
+    setBusyDay(false);
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setWeeklyOff(data.weeklyOff || next);
+    setDates(data.dates || dates);
+    notify(data.message, "ok");
+  };
+
+  const addNotice = async (event) => {
+    event.preventDefault();
+    setNoticeBusy(true);
+    setNoticeError("");
+    const data = await api("/admin/notices", {
+      method: "POST",
+      auth: true,
+      body: noticeForm,
+    });
+    setNoticeBusy(false);
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      setNoticeError(data.message);
+      return;
+    }
+    setNotices(data.notices || notices);
+    setNoticeForm({ message: "", until: "", always: false });
+    notify(data.message, "ok");
+  };
+
+  const saveEdit = async (id) => {
+    setEditBusy(true);
+    const data = await api("/admin/notices/" + encodeURIComponent(id), {
+      method: "PUT",
+      auth: true,
+      body: editForm,
+    });
+    setEditBusy(false);
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setNotices(data.notices || notices);
+    setEditingId("");
+    notify(data.message, "ok");
+  };
+
+  const deleteNotice = async (id) => {
+    const data = await api("/admin/notices/" + encodeURIComponent(id), {
+      method: "DELETE",
+      auth: true,
+    });
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setNotices(data.notices || notices);
+    notify(data.message, "ok");
+  };
+
+  if (loading) return <Loading label="Loading notices and leave settings" />;
+
+  return (
+    <div className="set-grid">
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Leave &amp; closures</h3>
+            <p className="small muted">
+              Close specific upcoming dates. Patients cannot book a closed date
+              and it's greyed out on your booking page.
+            </p>
+          </div>
+        </div>
+        <div className="panel-body stack">
+          {error ? <Alert kind="err">{error}</Alert> : null}
+          {dates.map((item) => (
+            <div
+              className="row"
+              key={item.value}
+              style={{ justifyContent: "space-between", alignItems: "center" }}
+            >
+              <div>
+                <b>{item.label}</b>
+                {item.off ? (
+                  <span className="badge badge-soft" style={{ marginLeft: 8 }}>
+                    Closed
+                  </span>
+                ) : null}
+              </div>
+              <div className="row">
+                {!item.off ? (
+                  <label
+                    className="small muted"
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(publishFor[item.value])}
+                      onChange={(e) =>
+                        setPublishFor((current) => ({
+                          ...current,
+                          [item.value]: e.target.checked,
+                        }))
+                      }
+                    />
+                    Publish leave notice
+                  </label>
+                ) : null}
+                <button
+                  className={
+                    "btn btn-sm " + (item.off ? "btn-outline" : "btn-dark")
+                  }
+                  disabled={busyDate === item.value}
+                  onClick={() => toggleLeave(item.value, !item.off)}
+                >
+                  {busyDate === item.value ? (
+                    <Spinner />
+                  ) : item.off ? (
+                    "Reopen"
+                  ) : (
+                    "Mark closed"
+                  )}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Weekly off days</h3>
+            <p className="small muted">
+              Days picked here are always closed for booking, every week,
+              automatically. No notice is published for these.
+            </p>
+          </div>
+        </div>
+        <div className="panel-body">
+          <div className="chips">
+            {WEEKDAYS.map((label, day) => (
+              <button
+                key={day}
+                type="button"
+                className={"chip" + (weeklyOff.includes(day) ? " on" : "")}
+                disabled={busyDay}
+                onClick={() => toggleWeeklyDay(day)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Notice board</h3>
+            <p className="small muted">
+              Shown to patients on your booking page.
+            </p>
+          </div>
+        </div>
+        <div className="panel-body stack">
+          {notices.length === 0 ? (
+            <p className="small muted">No notices published yet.</p>
+          ) : (
+            notices.map((n) =>
+              editingId === n.id ? (
+                <div className="panel" key={n.id} style={{ padding: 12 }}>
+                  <div className="field">
+                    <label>Message</label>
+                    <textarea
+                      className="textarea"
+                      rows="2"
+                      value={editForm.message}
+                      onChange={(e) =>
+                        setEditForm((c) => ({ ...c, message: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="row">
+                    <label
+                      className="small muted"
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={editForm.always}
+                        onChange={(e) =>
+                          setEditForm((c) => ({
+                            ...c,
+                            always: e.target.checked,
+                          }))
+                        }
+                      />
+                      Always show
+                    </label>
+                    {!editForm.always ? (
+                      <input
+                        className="input"
+                        type="date"
+                        value={editForm.until}
+                        onChange={(e) =>
+                          setEditForm((c) => ({ ...c, until: e.target.value }))
+                        }
+                      />
+                    ) : null}
+                  </div>
+                  <div className="row">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={editBusy}
+                      onClick={() => saveEdit(n.id)}
+                    >
+                      {editBusy ? <Spinner /> : "Save"}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setEditingId("")}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="row"
+                  key={n.id}
+                  style={{
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div>
+                    <p style={{ margin: 0 }}>{n.message}</p>
+                    <span className="small muted">
+                      {n.always
+                        ? "Always shown"
+                        : "Shown until " + fmtLongDate(n.until)}
+                      {n.auto ? " - auto-published from a leave day" : ""}
+                    </span>
+                  </div>
+                  <div className="row">
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => {
+                        setEditingId(n.id);
+                        setEditForm({
+                          message: n.message,
+                          until: n.until,
+                          always: n.always,
+                        });
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => deleteNotice(n.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ),
+            )
+          )}
+
+          <form className="stack" onSubmit={addNotice}>
+            <div className="field">
+              <label>New notice</label>
+              <textarea
+                className="textarea"
+                rows="2"
+                placeholder="e.g. OPD timings changed to 10 AM - 2 PM this week."
+                value={noticeForm.message}
+                onChange={(e) =>
+                  setNoticeForm((c) => ({ ...c, message: e.target.value }))
+                }
+              />
+            </div>
+            <div className="row">
+              <label
+                className="small muted"
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={noticeForm.always}
+                  onChange={(e) =>
+                    setNoticeForm((c) => ({
+                      ...c,
+                      always: e.target.checked,
+                      until: "",
+                    }))
+                  }
+                />
+                Always show
+              </label>
+              {!noticeForm.always ? (
+                <input
+                  className="input"
+                  type="date"
+                  value={noticeForm.until}
+                  onChange={(e) =>
+                    setNoticeForm((c) => ({ ...c, until: e.target.value }))
+                  }
+                />
+              ) : null}
+            </div>
+            {noticeError ? <Alert kind="err">{noticeError}</Alert> : null}
+            <button className="btn btn-primary btn-block" disabled={noticeBusy}>
+              {noticeBusy ? (
+                <>
+                  <Spinner /> Publishing...
+                </>
+              ) : (
+                <>
+                  <Icon name="plus" size={16} /> Publish notice
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * ROOT
+ * ========================================================================== */
 
 /* ============================================================================
  * ROOT

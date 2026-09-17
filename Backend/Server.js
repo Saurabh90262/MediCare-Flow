@@ -189,6 +189,37 @@ const clinicSchema = new mongoose.Schema(
     decidedAt: { type: Date, default: null },
     decidedBy: { type: String, default: "" },
     rejectionNote: { type: String, default: "" },
+
+    // Doctor-published notices shown on this clinic's own booking page.
+    notices: {
+      type: [
+        {
+          message: { type: String, required: true, trim: true },
+          // Inclusive YYYY-MM-DD the notice stops showing after. Ignored when always=true.
+          until: { type: String, default: "" },
+          always: { type: Boolean, default: false },
+          // true = auto-created by the leave toggle below, so it is deleted
+          // automatically the moment that leave day is reopened.
+          auto: { type: Boolean, default: false },
+          leaveDate: { type: String, default: "" },
+          createdAt: { type: Date, default: Date.now },
+          updatedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    // Specific-date closures inside the rolling booking window (today..+5).
+    leaveDates: {
+      type: [
+        {
+          date: { type: String, required: true },
+          publishNotice: { type: Boolean, default: false },
+        },
+      ],
+      default: [],
+    },
+    // Recurring weekly closures: 0 = Sunday .. 6 = Saturday.
+    weeklyOff: { type: [Number], default: [] },
   },
   { timestamps: true },
 );
@@ -487,6 +518,49 @@ function getAvailableDates() {
   const out = [];
   for (let i = 0; i <= BOOKING_DAYS; i += 1) out.push(addDays(start, i));
   return out;
+}
+
+function dayOfWeek(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay(); // 0=Sun..6=Sat
+}
+
+// True when `date` is inside this clinic's own closures - either a specific
+// leave date or a recurring weekly day off.
+function isDateOffForClinic(clinic, date) {
+  const weeklyOff = (clinic && clinic.weeklyOff) || [];
+  const leaveDates = (clinic && clinic.leaveDates) || [];
+  if (weeklyOff.includes(dayOfWeek(date))) return true;
+  return leaveDates.some((l) => l.date === date);
+}
+
+// The booking window, tagged with which dates this specific clinic has
+// closed. Used by the public booking page and its own admin panel.
+function clinicAvailableDates(clinic) {
+  return getAvailableDates().map((value) => ({
+    value,
+    label: dateLabel(value),
+    off: isDateOffForClinic(clinic, value),
+  }));
+}
+
+// Notices currently visible on this clinic's booking page: "always" notices,
+// plus dated ones whose `until` date has not passed yet.
+function activeNotices(clinic) {
+  const today = todayStr();
+  const list = (clinic && clinic.notices) || [];
+  return list
+    .filter((n) => n.always || (n.until && n.until >= today))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((n) => ({
+      id: String(n._id),
+      message: n.message,
+      until: n.until || "",
+      always: Boolean(n.always),
+      auto: Boolean(n.auto),
+      createdAt: n.createdAt,
+      updatedAt: n.updatedAt,
+    }));
 }
 
 function dateLabel(ymd) {
@@ -1212,12 +1286,10 @@ function clinicAuth(req, res, next) {
   const raw = str(req.headers.authorization || req.headers["x-auth-token"]);
   const token = raw.replace(/^Bearer\s+/i, "");
   if (!token)
-    return res
-      .status(401)
-      .json({
-        success: false,
-        message: "Please sign in to open your clinic dashboard.",
-      });
+    return res.status(401).json({
+      success: false,
+      message: "Please sign in to open your clinic dashboard.",
+    });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (!payload.clinicId) throw new Error("missing clinicId");
@@ -1225,12 +1297,10 @@ function clinicAuth(req, res, next) {
     req.clinicId = payload.clinicId; // the ONLY source of clinic scope
     return next();
   } catch (_error) {
-    return res
-      .status(401)
-      .json({
-        success: false,
-        message: "Your session has expired. Please sign in again.",
-      });
+    return res.status(401).json({
+      success: false,
+      message: "Your session has expired. Please sign in again.",
+    });
   }
 }
 
@@ -1257,24 +1327,20 @@ function ownerAuth(req, res, next) {
   const raw = str(req.headers.authorization || req.headers["x-auth-token"]);
   const token = raw.replace(/^Bearer\s+/i, "");
   if (!token)
-    return res
-      .status(401)
-      .json({
-        success: false,
-        message: "Please sign in to the master admin panel.",
-      });
+    return res.status(401).json({
+      success: false,
+      message: "Please sign in to the master admin panel.",
+    });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (payload.owner !== true) throw new Error("not an owner token");
     req.owner = payload;
     return next();
   } catch (_error) {
-    return res
-      .status(401)
-      .json({
-        success: false,
-        message: "Your owner session has expired. Please sign in again.",
-      });
+    return res.status(401).json({
+      success: false,
+      message: "Your owner session has expired. Please sign in again.",
+    });
   }
 }
 
@@ -1623,10 +1689,8 @@ app.get(
         },
       }),
       today: todayStr(),
-      dates: getAvailableDates().map((value) => ({
-        value,
-        label: dateLabel(value),
-      })),
+      dates: clinicAvailableDates(clinic),
+      notices: activeNotices(clinic),
     });
   }),
 );
@@ -1671,21 +1735,17 @@ app.get(
     const mobile = str(req.query.mobile);
     const bookingId = str(req.query.bookingId).toUpperCase();
     if (!mobile && !bookingId) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Enter a 10-digit mobile number or a booking ID.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Enter a 10-digit mobile number or a booking ID.",
+      });
     }
     const query = bookingId ? { bookingId } : { mobile };
     if (mobile && !/^\d{10}$/.test(mobile)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Mobile number must be exactly 10 digits.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number must be exactly 10 digits.",
+      });
     }
     const rows = await Appointment.find(query)
       .sort({ date: -1, bookingNumber: -1 })
@@ -1903,13 +1963,10 @@ app.post(
 
     const wantedId = str(body.adminUserId).toLowerCase();
     if (await Clinic.exists({ adminUserId: wantedId })) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message:
-            "That admin user ID is already taken. Please choose another.",
-        });
+      return res.status(409).json({
+        success: false,
+        message: "That admin user ID is already taken. Please choose another.",
+      });
     }
     if (
       await Clinic.exists(identifierQuery(body.adminEmail) || { _id: null })
@@ -1979,37 +2036,30 @@ app.post(
     }
     if (pending.attempts >= 5) {
       pendingRegistrations.delete(adminUserId);
-      return res
-        .status(429)
-        .json({
-          success: false,
-          message:
-            "Too many incorrect codes. Please start the registration again.",
-        });
+      return res.status(429).json({
+        success: false,
+        message:
+          "Too many incorrect codes. Please start the registration again.",
+      });
     }
     if (pending.otp !== otp) {
       pending.attempts += 1;
       pendingRegistrations.set(adminUserId, pending);
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Incorrect code. " + (5 - pending.attempts) + " attempt(s) left.",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Incorrect code. " + (5 - pending.attempts) + " attempt(s) left.",
+      });
     }
 
     const body = pending.data;
     pendingRegistrations.delete(adminUserId);
 
     if (await Clinic.exists({ adminUserId })) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message:
-            "That admin user ID is already taken. Please choose another.",
-        });
+      return res.status(409).json({
+        success: false,
+        message: "That admin user ID is already taken. Please choose another.",
+      });
     }
 
     let clinicId = slugify(body.clinicName) || "clinic";
@@ -2129,12 +2179,10 @@ app.post(
       ),
     });
     if (!sent)
-      return res
-        .status(502)
-        .json({
-          success: false,
-          message: "Send failed: " + (mailer.lastError || "unknown error"),
-        });
+      return res.status(502).json({
+        success: false,
+        message: "Send failed: " + (mailer.lastError || "unknown error"),
+      });
     return res.json({
       success: true,
       message: "Test email sent to " + maskEmail(clinic.adminEmail) + ".",
@@ -2153,13 +2201,11 @@ app.post(
       body.identifier || body.adminUserId || body.adminEmail,
     );
     if (!query) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Enter your admin user ID or the admin email you registered with.",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Enter your admin user ID or the admin email you registered with.",
+      });
     }
 
     const clinic = await Clinic.findOne(query);
@@ -2171,13 +2217,11 @@ app.post(
       });
     }
     if (!clinic.adminEmail) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "This clinic has no admin email on file, so a reset code cannot be emailed.",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "This clinic has no admin email on file, so a reset code cannot be emailed.",
+      });
     }
 
     const code = sixDigits();
@@ -2236,12 +2280,10 @@ app.post(
       });
     }
     if (password.length < 6)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "New password must be at least 6 characters.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters.",
+      });
 
     const clinic = await Clinic.findOne(query);
     const valid =
@@ -2252,13 +2294,11 @@ app.post(
       (await bcrypt.compare(code, clinic.resetCodeHash));
 
     if (!valid)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "That reset code is invalid or has expired. Request a new one.",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "That reset code is invalid or has expired. Request a new one.",
+      });
 
     clinic.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     clinic.resetCodeHash = "";
@@ -2305,6 +2345,14 @@ app.post(
     if (problem)
       return res.status(400).json({ success: false, message: problem });
 
+    if (isDateOffForClinic(clinic, str(form.date))) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The clinic is closed on the selected date. Please choose another date.",
+      });
+    }
+
     const duplicate = await Appointment.findOne({
       clinicId,
       date: str(form.date),
@@ -2339,12 +2387,10 @@ app.post(
       });
       if (!sent) {
         otpStore.delete(otpKey(clinicId, form.email));
-        return res
-          .status(502)
-          .json({
-            success: false,
-            message: "We could not send the OTP email. Please try again.",
-          });
+        return res.status(502).json({
+          success: false,
+          message: "We could not send the OTP email. Please try again.",
+        });
       }
       return res.json({
         success: true,
@@ -2413,6 +2459,14 @@ app.post(
     if (problem)
       return res.status(400).json({ success: false, message: problem });
 
+    if (isDateOffForClinic(clinic, str(form.date))) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The clinic is closed on the selected date. Please choose another date.",
+      });
+    }
+
     const duplicate = await Appointment.findOne({
       clinicId,
       date: str(form.date),
@@ -2474,32 +2528,26 @@ app.post(
 
     if (!pending || pending.expires < Date.now()) {
       otpStore.delete(key);
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "That OTP has expired. Please request a new one.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "That OTP has expired. Please request a new one.",
+      });
     }
     if (pending.attempts >= 5) {
       otpStore.delete(key);
-      return res
-        .status(429)
-        .json({
-          success: false,
-          message: "Too many incorrect attempts. Please request a new OTP.",
-        });
+      return res.status(429).json({
+        success: false,
+        message: "Too many incorrect attempts. Please request a new OTP.",
+      });
     }
     if (pending.otp !== otp) {
       pending.attempts += 1;
       otpStore.set(key, pending);
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Incorrect OTP. " + (5 - pending.attempts) + " attempt(s) left.",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Incorrect OTP. " + (5 - pending.attempts) + " attempt(s) left.",
+      });
     }
 
     const clinic = await Clinic.findOne(
@@ -2773,12 +2821,10 @@ async function setStatus(req, res, status) {
     { new: true },
   );
   if (!appointment)
-    return res
-      .status(404)
-      .json({
-        success: false,
-        message: "Appointment not found for this clinic.",
-      });
+    return res.status(404).json({
+      success: false,
+      message: "Appointment not found for this clinic.",
+    });
 
   if (status === "cancelled" && appointment.email) {
     const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
@@ -2892,12 +2938,10 @@ app.get(
       clinicId: req.clinicId,
     }).lean();
     if (!appointment)
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Appointment not found for this clinic.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found for this clinic.",
+      });
     return res.json({
       success: true,
       appointment: Object.assign({}, appointment, {
@@ -2981,20 +3025,16 @@ app.put(
       if (body[field] !== undefined) updates[field] = str(body[field]);
     }
     if (updates.phone && !/^\d{10}$/.test(updates.phone)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Clinic phone number must be exactly 10 digits.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Clinic phone number must be exactly 10 digits.",
+      });
     }
     if (updates.adminEmail && !EMAIL_RE.test(updates.adminEmail)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Please enter a valid admin email address.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid admin email address.",
+      });
     }
     if (updates.clinicName === "")
       return res
@@ -3027,6 +3067,238 @@ app.put(
   }),
 );
 
+/* --------------------------------------------------- notices & leave days -- */
+/* Everything below is scoped to req.clinicId from clinicAuth, same as the    */
+/* rest of the admin dashboard.                                               */
+
+app.get(
+  "/api/admin/leave",
+  clinicAuth,
+  ah(async (req, res) => {
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    return res.json({
+      success: true,
+      dates: clinicAvailableDates(clinic),
+      weeklyOff: clinic.weeklyOff || [],
+      notices: (clinic.notices || [])
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map((n) => ({
+          id: String(n._id),
+          message: n.message,
+          until: n.until || "",
+          always: Boolean(n.always),
+          auto: Boolean(n.auto),
+          leaveDate: n.leaveDate || "",
+          createdAt: n.createdAt,
+          updatedAt: n.updatedAt,
+        })),
+    });
+  }),
+);
+
+// Toggle a specific date, inside the booking window, closed or open.
+app.put(
+  "/api/admin/leave/:date",
+  clinicAuth,
+  ah(async (req, res) => {
+    const date = ymdOr(req.params.date, "");
+    if (!date || !getAvailableDates().includes(date))
+      return res.status(400).json({
+        success: false,
+        message:
+          "You can only mark leave from today up to the next " +
+          BOOKING_DAYS +
+          " days.",
+      });
+
+    const off = Boolean((req.body || {}).off);
+    const publishNotice = Boolean((req.body || {}).publishNotice);
+
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+
+    clinic.leaveDates = (clinic.leaveDates || []).filter(
+      (l) => l.date !== date,
+    );
+    // Any auto-notice tied to this date is cleared first - reopening the
+    // date must never leave a stale "clinic closed" notice behind.
+    clinic.notices = (clinic.notices || []).filter(
+      (n) => !(n.auto && n.leaveDate === date),
+    );
+
+    if (off) {
+      clinic.leaveDates.push({ date, publishNotice });
+      if (publishNotice) {
+        clinic.notices.push({
+          message: "The clinic will remain closed on " + longDate(date) + ".",
+          until: date,
+          always: false,
+          auto: true,
+          leaveDate: date,
+        });
+      }
+    }
+
+    await clinic.save();
+    return res.json({
+      success: true,
+      message: off
+        ? "That date is now marked closed."
+        : "That date is open again.",
+      dates: clinicAvailableDates(clinic),
+      notices: activeNotices(clinic),
+    });
+  }),
+);
+
+// Recurring weekly closures, e.g. every Sunday. Replaces the whole set.
+app.put(
+  "/api/admin/weekly-off",
+  clinicAuth,
+  ah(async (req, res) => {
+    const raw = Array.isArray((req.body || {}).days) ? req.body.days : [];
+    const days = Array.from(
+      new Set(
+        raw.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6),
+      ),
+    );
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId },
+      { weeklyOff: days },
+      { new: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    return res.json({
+      success: true,
+      message: "Weekly off days updated.",
+      weeklyOff: clinic.weeklyOff,
+      dates: clinicAvailableDates(clinic),
+    });
+  }),
+);
+
+app.post(
+  "/api/admin/notices",
+  clinicAuth,
+  ah(async (req, res) => {
+    const message = str((req.body || {}).message);
+    const always = Boolean((req.body || {}).always);
+    const until = always ? "" : ymdOr((req.body || {}).until, "");
+    if (!message || message.length < 3)
+      return res
+        .status(400)
+        .json({ success: false, message: "Please enter a notice message." });
+    if (!always && !until)
+      return res.status(400).json({
+        success: false,
+        message:
+          "Choose a date for the notice to show until, or select Always.",
+      });
+
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId },
+      { $push: { notices: { message, until, always, auto: false } } },
+      { new: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    return res.status(201).json({
+      success: true,
+      message: "Notice published.",
+      notices: activeNotices(clinic),
+    });
+  }),
+);
+
+app.put(
+  "/api/admin/notices/:id",
+  clinicAuth,
+  ah(async (req, res) => {
+    const id = str(req.params.id);
+    if (!mongoose.isValidObjectId(id))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid notice id." });
+
+    const message = str((req.body || {}).message);
+    const always = Boolean((req.body || {}).always);
+    const until = always ? "" : ymdOr((req.body || {}).until, "");
+    if (!message || message.length < 3)
+      return res
+        .status(400)
+        .json({ success: false, message: "Please enter a notice message." });
+    if (!always && !until)
+      return res.status(400).json({
+        success: false,
+        message:
+          "Choose a date for the notice to show until, or select Always.",
+      });
+
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId, "notices._id": id },
+      {
+        $set: {
+          "notices.$.message": message,
+          "notices.$.always": always,
+          "notices.$.until": until,
+          "notices.$.updatedAt": new Date(),
+          // Hand-editing detaches it from whichever leave date created it.
+          "notices.$.auto": false,
+          "notices.$.leaveDate": "",
+        },
+      },
+      { new: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Notice not found." });
+    return res.json({
+      success: true,
+      message: "Notice updated.",
+      notices: activeNotices(clinic),
+    });
+  }),
+);
+
+app.delete(
+  "/api/admin/notices/:id",
+  clinicAuth,
+  ah(async (req, res) => {
+    const id = str(req.params.id);
+    if (!mongoose.isValidObjectId(id))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid notice id." });
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId },
+      { $pull: { notices: { _id: id } } },
+      { new: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    return res.json({
+      success: true,
+      message: "Notice deleted.",
+      notices: activeNotices(clinic),
+    });
+  }),
+);
+
 app.put(
   "/api/admin/password",
   clinicAuth,
@@ -3034,12 +3306,10 @@ app.put(
     const currentPassword = str((req.body || {}).currentPassword);
     const newPassword = str((req.body || {}).newPassword);
     if (newPassword.length < 6)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "New password must be at least 6 characters.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters.",
+      });
 
     const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
@@ -3047,12 +3317,10 @@ app.put(
         .status(404)
         .json({ success: false, message: "Clinic not found." });
     if (!(await bcrypt.compare(currentPassword, clinic.passwordHash))) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message: "Your current password is incorrect.",
-        });
+      return res.status(401).json({
+        success: false,
+        message: "Your current password is incorrect.",
+      });
     }
 
     clinic.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
@@ -3368,12 +3636,10 @@ app.put(
         .status(404)
         .json({ success: false, message: "That listing no longer exists." });
     if (clinic.status !== "approved") {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Only approved listings can be hidden or unhidden.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Only approved listings can be hidden or unhidden.",
+      });
     }
 
     clinic.hidden = hidden;
@@ -3403,13 +3669,10 @@ app.post(
 
     const adminUserId = str(body.adminUserId).toLowerCase();
     if (await Clinic.exists({ adminUserId })) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message:
-            "That admin user ID is already taken. Please choose another.",
-        });
+      return res.status(409).json({
+        success: false,
+        message: "That admin user ID is already taken. Please choose another.",
+      });
     }
 
     let clinicId = slugify(body.clinicName) || "clinic";
@@ -3481,24 +3744,20 @@ app.put(
     if (body.phone !== undefined) {
       const phone = str(body.phone);
       if (!/^\d{10}$/.test(phone))
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Clinic phone number must be exactly 10 digits.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Clinic phone number must be exactly 10 digits.",
+        });
       clinic.phone = phone;
     }
 
     if (body.adminEmail !== undefined) {
       const email = str(body.adminEmail).toLowerCase();
       if (!EMAIL_RE.test(email)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Please enter a valid admin email address.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid admin email address.",
+        });
       }
       clinic.adminEmail = email;
     }
@@ -3506,24 +3765,20 @@ app.put(
     if (body.adminUserId !== undefined) {
       const wanted = str(body.adminUserId).toLowerCase();
       if (!/^[a-zA-Z0-9_.]{4,24}$/.test(wanted)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Admin user ID must be 4-24 characters (letters, numbers, dot or underscore).",
+        });
       }
       if (
         wanted !== clinic.adminUserId &&
         (await Clinic.exists({ adminUserId: wanted }))
       ) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            message: "That admin user ID is already taken.",
-          });
+        return res.status(409).json({
+          success: false,
+          message: "That admin user ID is already taken.",
+        });
       }
       clinic.adminUserId = wanted;
     }
@@ -3531,12 +3786,10 @@ app.put(
     // Only reset the password when a new one is actually supplied.
     if (str(body.password)) {
       if (str(body.password).length < 6) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Password must be at least 6 characters long.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Password must be at least 6 characters long.",
+        });
       }
       clinic.passwordHash = await bcrypt.hash(
         str(body.password),
@@ -3551,12 +3804,10 @@ app.put(
       !str(clinic.doctorName) ||
       !str(clinic.address)
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Clinic name, doctor name and address cannot be empty.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Clinic name, doctor name and address cannot be empty.",
+      });
     }
 
     await clinic.save();
@@ -3626,23 +3877,19 @@ app.post(
         .split(",")[0]
         .trim() || "unknown";
     if (!uploadAllowed(ip)) {
-      return res
-        .status(429)
-        .json({
-          success: false,
-          message:
-            "Too many uploads from this device. Please wait a few minutes.",
-        });
+      return res.status(429).json({
+        success: false,
+        message:
+          "Too many uploads from this device. Please wait a few minutes.",
+      });
     }
 
     const buffer = Buffer.isBuffer(req.body) ? req.body : null;
     if (!buffer || !buffer.length) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "No image data was received. Please choose the file again.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "No image data was received. Please choose the file again.",
+      });
     }
     if (buffer.length > MAX_IMAGE_BYTES) {
       return res.status(413).json({
@@ -3658,12 +3905,10 @@ app.post(
 
     const kind = sniffImage(buffer);
     if (!kind) {
-      return res
-        .status(415)
-        .json({
-          success: false,
-          message: "Only JPG, PNG, WEBP or GIF images can be uploaded.",
-        });
+      return res.status(415).json({
+        success: false,
+        message: "Only JPG, PNG, WEBP or GIF images can be uploaded.",
+      });
     }
 
     const key =
@@ -3677,12 +3922,10 @@ app.post(
       await r2Put(key, buffer, kind.mime);
     } catch (error) {
       console.error("[ERROR] R2 upload failed:", error.message);
-      return res
-        .status(502)
-        .json({
-          success: false,
-          message: "The image could not be stored in R2. " + error.message,
-        });
+      return res.status(502).json({
+        success: false,
+        message: "The image could not be stored in R2. " + error.message,
+      });
     }
 
     console.log(
@@ -3738,21 +3981,17 @@ app.get(
 );
 
 app.use("/api", (req, res) =>
-  res
-    .status(404)
-    .json({
-      success: false,
-      message: "No API route matches " + req.method + " " + req.originalUrl,
-    }),
+  res.status(404).json({
+    success: false,
+    message: "No API route matches " + req.method + " " + req.originalUrl,
+  }),
 );
 
 app.use((_req, res) =>
-  res
-    .status(404)
-    .json({
-      success: false,
-      message: "Not found. This server only exposes /api routes.",
-    }),
+  res.status(404).json({
+    success: false,
+    message: "Not found. This server only exposes /api routes.",
+  }),
 );
 
 // Always JSON, never an HTML stack trace (that is what breaks the frontend).
@@ -3760,24 +3999,20 @@ app.use((error, _req, res, _next) => {
   console.error("[ERROR]", error.stack || error.message);
   if (error.name === "ValidationError") {
     const first = Object.values(error.errors || {})[0];
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: first ? first.message : "Some fields were invalid.",
-      });
+    return res.status(400).json({
+      success: false,
+      message: first ? first.message : "Some fields were invalid.",
+    });
   }
   if (error.code === 11000) {
     return res
       .status(409)
       .json({ success: false, message: "That record already exists." });
   }
-  return res
-    .status(500)
-    .json({
-      success: false,
-      message: "Something went wrong on the server. Please try again.",
-    });
+  return res.status(500).json({
+    success: false,
+    message: "Something went wrong on the server. Please try again.",
+  });
 });
 
 process.on("unhandledRejection", (reason) =>
