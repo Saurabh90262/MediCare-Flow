@@ -4848,6 +4848,12 @@ function HomePage({ go }) {
               >
                 <Icon name="building" size={17} /> List your clinic
               </button>
+              <button
+                className="btn btn-lg btn-soft"
+                onClick={() => go("/track")}
+              >
+                <Icon name="activity" size={17} /> Live token queue
+              </button>
             </div>
             <div className="hero-stats">
               <div>
