@@ -1300,6 +1300,41 @@ a{color:var(--pr); text-decoration:none}
 .alert-info{background:#eff8ff; color:#0c4a6e; border-color:#cbe6fb}
 .alert-warn{background:#fffbeb; color:#92400e; border-color:#fbe7ba}
 
+.notice-board{
+  position:relative; overflow:hidden;
+  background:linear-gradient(135deg,#fff7e6 0%,#fef3c7 100%);
+  border:1px solid #fbbf24; border-radius:var(--r2);
+  padding:18px 20px 20px; margin-bottom:18px;
+  box-shadow:var(--sh3), 0 0 0 1px rgba(245,158,11,.08);
+  animation:pop .4s var(--ease);
+}
+.notice-board::before{
+  content:''; position:absolute; inset:0 auto 0 0; width:6px;
+  background:linear-gradient(180deg,#f59e0b,#d97706);
+}
+.notice-board-head{display:flex; align-items:center; gap:10px; margin-bottom:14px}
+.notice-badge{
+  position:relative; width:34px; height:34px; border-radius:50%; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  font-size:17px; line-height:1; text-align:center;
+  background:linear-gradient(135deg,#f59e0b,#d97706); box-shadow:0 4px 10px rgba(217,119,6,.35);
+}
+.notice-badge span{transform:translateY(0.5px)}
+.notice-badge::after{
+  content:''; position:absolute; inset:-5px; border-radius:50%;
+  border:2px solid rgba(245,158,11,.45); animation:ping 2.2s ease-out infinite;
+}
+.notice-board-head h4{margin:0; color:#78350f; font-size:16px}
+.notice-board-head span{display:block; font-size:12px; color:#b45309; margin-top:1px}
+.notice-item{
+  display:flex; gap:10px; align-items:flex-start; background:rgba(255,255,255,.65);
+  border:1px solid rgba(251,191,36,.5); border-radius:var(--r1); padding:11px 13px;
+}
+.notice-item + .notice-item{margin-top:9px}
+.notice-item span.pin{font-size:16px; line-height:1}
+.notice-item p{margin:0; color:#78350f; font-weight:700; font-size:14px; line-height:1.5}
+.notice-item .notice-meta{display:block; margin-top:3px; font-size:12px; color:#b45309}
+
 .badge{
   display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px;
   font-size:11.5px; font-weight:700; letter-spacing:.02em; white-space:nowrap;
@@ -5691,23 +5726,28 @@ function BookingPage({ clinicId, go, notify }) {
           </div>
 
           {notices.length ? (
-            <div className="panel" style={{ marginBottom: 16 }}>
-              <div className="panel-head">
+            <div className="notice-board">
+              <div className="notice-board-head">
+                <span className="notice-badge">
+                  <span>📢</span>
+                </span>
                 <div>
-                  <span className="eyebrow">
-                    <Icon name="alert" size={13} /> Notice board
-                  </span>
+                  <h4>Notice board</h4>
+                  <span>Important updates from the clinic</span>
                 </div>
               </div>
-              <div className="panel-body stack">
+              <div>
                 {notices.map((n) => (
-                  <div key={n.id}>
-                    <p style={{ margin: 0 }}>{n.message}</p>
-                    <span className="small muted">
-                      {n.always
-                        ? "Always shown"
-                        : "Shown until " + fmtLongDate(n.until)}
-                    </span>
+                  <div className="notice-item" key={n.id}>
+                    <span className="pin">📌</span>
+                    <div>
+                      <p>{n.message}</p>
+                      <span className="notice-meta">
+                        {n.always
+                          ? "🔁 Always shown"
+                          : "🗓️ Shown until " + fmtLongDate(n.until)}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
