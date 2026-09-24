@@ -152,8 +152,12 @@ const clinicSchema = new mongoose.Schema(
   {
     clinicId: { type: String, required: true, unique: true, index: true },
     clinicName: { type: String, required: true, trim: true },
-    doctorName: { type: String, required: true, trim: true },
-    specialization: { type: String, required: true, trim: true },
+    // "solo" = the original single-doctor clinic. "hospital" = multiple
+    // doctors under one listing, each with their own doctors[] entry below.
+    type: { type: String, enum: ["solo", "hospital"], default: "solo" },
+    // Only used for type "solo" - a hospital's doctors live in doctors[].
+    doctorName: { type: String, default: "", trim: true },
+    specialization: { type: String, default: "", trim: true },
     address: { type: String, required: true, trim: true },
     city: { type: String, default: "", trim: true },
     phone: { type: String, required: true, trim: true },
@@ -189,6 +193,30 @@ const clinicSchema = new mongoose.Schema(
     decidedAt: { type: Date, default: null },
     decidedBy: { type: String, default: "" },
     rejectionNote: { type: String, default: "" },
+
+    // type "hospital" only: doctors listed under this hospital. Each has
+    // their own login (adminUserId + passwordHash), scoped to just their
+    // own patients via a doctorId claim on their JWT.
+    doctors: {
+      type: [
+        {
+          doctorId: { type: String, required: true },
+          name: { type: String, required: true, trim: true },
+          specialization: { type: String, required: true, trim: true },
+          photo: { type: String, default: "" },
+          active: { type: Boolean, default: true },
+          adminUserId: {
+            type: String,
+            required: true,
+            trim: true,
+            lowercase: true,
+          },
+          passwordHash: { type: String, required: true },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
 
     // Doctor-published notices shown on this clinic's own booking page.
     notices: {
@@ -261,6 +289,12 @@ const appointmentSchema = new mongoose.Schema(
     // Set the moment a token is marked visited, cleared when reverted. This is
     // what makes "now serving" and the consultation-pace estimate possible.
     visitedAt: { type: Date, default: null },
+    // Only set for hospital-type clinics. doctorName/doctorSpecialization are
+    // a snapshot at booking time, so a later edit to the roster never rewrites
+    // history on old appointments.
+    doctorId: { type: String, default: "", index: true },
+    doctorName: { type: String, default: "" },
+    doctorSpecialization: { type: String, default: "" },
   },
   { timestamps: true },
 );
@@ -623,11 +657,24 @@ function sixDigits() {
 
 function publicClinic(clinic) {
   const raw = clinic && clinic.toObject ? clinic.toObject() : clinic || {};
+  const isHospital = raw.type === "hospital";
   return {
     clinicId: raw.clinicId,
     clinicName: raw.clinicName,
-    doctorName: raw.doctorName,
-    specialization: raw.specialization,
+    type: raw.type || "solo",
+    doctorName: isHospital ? "" : raw.doctorName,
+    specialization: isHospital ? "" : raw.specialization,
+    // Public, patient-facing roster: active doctors only.
+    doctors: isHospital
+      ? (raw.doctors || [])
+          .filter((d) => d.active !== false)
+          .map((d) => ({
+            id: d.doctorId,
+            name: d.name,
+            specialization: d.specialization,
+            photo: d.photo || "",
+          }))
+      : [],
     address: raw.address,
     city: raw.city || "",
     phone: raw.phone,
@@ -643,11 +690,37 @@ function adminClinic(clinic) {
   return Object.assign(publicClinic(raw), {
     adminUserId: raw.adminUserId,
     adminEmail: raw.adminEmail,
-    // The clinic dashboard uses these to show its own approval banner.
     status: raw.status || "pending",
     hidden: Boolean(raw.hidden),
     rejectionNote: raw.rejectionNote || "",
+    // Full roster (no password hashes), including inactive doctors - this is
+    // what the hospital admin dashboard uses to show/hide the Doctors tab.
+    doctors:
+      raw.type === "hospital"
+        ? (raw.doctors || []).map((d) => ({
+            id: d.doctorId,
+            name: d.name,
+            specialization: d.specialization,
+            photo: d.photo || "",
+            active: d.active !== false,
+          }))
+        : [],
   });
+}
+
+// The one doctor a *doctor-scoped* session belongs to (null for a hospital
+// or solo-clinic admin session, which manage everyone/nobody respectively).
+function sessionDoctor(clinic, doctorId) {
+  if (!doctorId) return null;
+  const raw = clinic && clinic.toObject ? clinic.toObject() : clinic || {};
+  const found = (raw.doctors || []).find((d) => d.doctorId === doctorId);
+  if (!found) return null;
+  return {
+    id: found.doctorId,
+    name: found.name,
+    specialization: found.specialization,
+    photo: found.photo || "",
+  };
 }
 
 /* Two deliberately different gates:
@@ -922,6 +995,17 @@ function validateAppointmentForm(data, options = {}) {
   if (!address || address.length < 4)
     return "Please enter the patient address.";
 
+  if (options.clinic && options.clinic.type === "hospital") {
+    const doctorId = str(form.doctorId);
+    if (!doctorId) return "Please select a doctor for this appointment.";
+    const doctors = options.clinic.doctors || [];
+    const exists = doctors.some(
+      (d) => d.doctorId === doctorId && d.active !== false,
+    );
+    if (!exists)
+      return "The selected doctor is not available. Please choose another.";
+  }
+
   /* Email is OPTIONAL for every booking source now that appointments no longer
      need an OTP. Anything typed in must still be a real address. */
   if (email && !EMAIL_RE.test(email)) {
@@ -944,7 +1028,7 @@ function validateAppointmentForm(data, options = {}) {
   return null;
 }
 
-function normalizeForm(form, source) {
+function normalizeForm(form, source, doctor) {
   return {
     name: str(form.name),
     gender: str(form.gender),
@@ -956,20 +1040,28 @@ function normalizeForm(form, source) {
     address: str(form.address),
     quota: str(form.quota) === "Emergency" ? "Emergency" : "General",
     source: source === "walk-in" ? "walk-in" : "online",
+    // A `doctor` object (from a fresh lookup) wins; otherwise fall back to
+    // whatever is already on `form` - covers re-normalizing an OTP-pending
+    // record that was snapshotted earlier.
+    doctorId: doctor ? doctor.doctorId : str(form.doctorId),
+    doctorName: doctor ? doctor.name : str(form.doctorName),
+    doctorSpecialization: doctor
+      ? doctor.specialization
+      : str(form.doctorSpecialization),
   };
 }
 
 function validateRegistration(body) {
+  const type = str(body.type) === "hospital" ? "hospital" : "solo";
   const required = [
     "clinicName",
-    "doctorName",
-    "specialization",
     "address",
     "phone",
     "adminEmail",
     "adminUserId",
     "password",
   ];
+  if (type === "solo") required.push("doctorName", "specialization");
   for (const field of required) {
     if (!str(body[field]))
       return "Please fill in every required field (" + field + " is missing).";
@@ -1019,8 +1111,8 @@ async function getNextBookingNumber(clinicId, date) {
   return counter.seq;
 }
 
-async function createAppointment(clinicId, form, source, attempt = 1) {
-  const data = normalizeForm(form, source);
+async function createAppointment(clinicId, form, source, doctor, attempt = 1) {
+  const data = normalizeForm(form, source, doctor);
   const bookingNumber = await getNextBookingNumber(clinicId, data.date);
   try {
     return await Appointment.create(
@@ -1031,7 +1123,7 @@ async function createAppointment(clinicId, form, source, attempt = 1) {
     );
   } catch (error) {
     if (error.code === 11000 && attempt < 4)
-      return createAppointment(clinicId, form, source, attempt + 1);
+      return createAppointment(clinicId, form, source, doctor, attempt + 1);
     throw error;
   }
 }
@@ -1267,18 +1359,14 @@ setInterval(
   5 * 60 * 1000,
 ).unref();
 
-function signToken(clinic) {
-  return jwt.sign(
-    {
-      clinicId: clinic.clinicId,
-      adminUserId: clinic.adminUserId,
-      clinicName: clinic.clinicName,
-    },
-    JWT_SECRET,
-    {
-      expiresIn: SESSION_TTL,
-    },
-  );
+function signToken(clinic, doctorId) {
+  const payload = {
+    clinicId: clinic.clinicId,
+    adminUserId: clinic.adminUserId,
+    clinicName: clinic.clinicName,
+  };
+  if (doctorId) payload.doctorId = doctorId;
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: SESSION_TTL });
 }
 
 // Replaces the old shared x-admin-secret header with per-clinic JWT auth.
@@ -1295,6 +1383,7 @@ function clinicAuth(req, res, next) {
     if (!payload.clinicId) throw new Error("missing clinicId");
     req.admin = payload;
     req.clinicId = payload.clinicId; // the ONLY source of clinic scope
+    req.doctorId = payload.doctorId || ""; // "" = hospital/clinic admin, not a single doctor
     return next();
   } catch (_error) {
     return res.status(401).json({
@@ -2066,11 +2155,13 @@ app.post(
     if (await Clinic.exists({ clinicId }))
       clinicId = clinicId + "-" + crypto.randomBytes(2).toString("hex");
 
+    const type = str(body.type) === "hospital" ? "hospital" : "solo";
     const clinic = await Clinic.create({
       clinicId,
       clinicName: str(body.clinicName),
-      doctorName: str(body.doctorName),
-      specialization: str(body.specialization),
+      type,
+      doctorName: type === "solo" ? str(body.doctorName) : "",
+      specialization: type === "solo" ? str(body.specialization) : "",
       address: str(body.address),
       city: str(body.city),
       phone: str(body.phone),
@@ -2098,7 +2189,7 @@ app.post(
         clinic.clinicName +
         " is registered. Your listing is now awaiting owner approval.",
       token: signToken(clinic),
-      clinic: adminClinic(clinic),
+      clinic: Object.assign(adminClinic(clinic), { doctor: null }),
     });
   }),
 );
@@ -2113,23 +2204,54 @@ app.post(
         .status(400)
         .json({ success: false, message: "Enter your user ID and password." });
     }
-    const clinic = await Clinic.findOne({ adminUserId });
-    const ok = clinic && (await bcrypt.compare(password, clinic.passwordHash));
-    if (!ok)
-      return res
-        .status(401)
-        .json({ success: false, message: "Incorrect user ID or password." });
-    if (!clinic.active)
-      return res
-        .status(403)
-        .json({ success: false, message: "This clinic account is disabled." });
 
-    return res.json({
-      success: true,
-      message: "Welcome back, " + clinic.clinicName + ".",
-      token: signToken(clinic),
-      clinic: adminClinic(clinic),
+    // 1) A direct clinic or hospital admin account.
+    const clinic = await Clinic.findOne({ adminUserId });
+    if (clinic && (await bcrypt.compare(password, clinic.passwordHash))) {
+      if (!clinic.active)
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "This clinic account is disabled.",
+          });
+      return res.json({
+        success: true,
+        message: "Welcome back, " + clinic.clinicName + ".",
+        token: signToken(clinic),
+        clinic: Object.assign(adminClinic(clinic), { doctor: null }),
+      });
+    }
+
+    // 2) A doctor's own login, nested inside a hospital's roster.
+    const hospital = await Clinic.findOne({
+      type: "hospital",
+      "doctors.adminUserId": adminUserId,
     });
+    const doc =
+      hospital &&
+      (hospital.doctors || []).find((d) => d.adminUserId === adminUserId);
+    if (doc && (await bcrypt.compare(password, doc.passwordHash))) {
+      if (!hospital.active || doc.active === false)
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "This doctor account is disabled.",
+          });
+      return res.json({
+        success: true,
+        message: "Welcome back, " + doc.name + ".",
+        token: signToken(hospital, doc.doctorId),
+        clinic: Object.assign(adminClinic(hospital), {
+          doctor: sessionDoctor(hospital, doc.doctorId),
+        }),
+      });
+    }
+
+    return res
+      .status(401)
+      .json({ success: false, message: "Incorrect user ID or password." });
   }),
 );
 
@@ -2142,7 +2264,12 @@ app.get(
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
-    return res.json({ success: true, clinic: adminClinic(clinic) });
+    return res.json({
+      success: true,
+      clinic: Object.assign(adminClinic(clinic), {
+        doctor: sessionDoctor(clinic, req.doctorId),
+      }),
+    });
   }),
 );
 
@@ -2341,9 +2468,17 @@ app.post(
 
     const problem = validateAppointmentForm(form, {
       requireEmail: REQUIRE_BOOKING_OTP,
+      clinic,
     });
     if (problem)
       return res.status(400).json({ success: false, message: problem });
+
+    const doctor =
+      clinic.type === "hospital"
+        ? (clinic.doctors || []).find(
+            (d) => d.doctorId === str(form.doctorId) && d.active !== false,
+          )
+        : null;
 
     if (isDateOffForClinic(clinic, str(form.date))) {
       return res.status(400).json({
@@ -2372,7 +2507,7 @@ app.post(
     /* Flag on -> fall back to the two-step OTP flow. */
     if (REQUIRE_BOOKING_OTP) {
       const otp = sixDigits();
-      const pending = normalizeForm(form, "online");
+      const pending = normalizeForm(form, "online", doctor);
       otpStore.set(otpKey(clinicId, form.email), {
         otp,
         form: pending,
@@ -2400,7 +2535,12 @@ app.post(
       });
     }
 
-    const appointment = await createAppointment(clinicId, form, "online");
+    const appointment = await createAppointment(
+      clinicId,
+      form,
+      "online",
+      doctor,
+    );
 
     // Optional email: only mail the patient when an address was actually given.
     if (appointment.email) {
@@ -2455,9 +2595,19 @@ app.post(
         .status(404)
         .json({ success: false, message: "This clinic could not be found." });
 
-    const problem = validateAppointmentForm(form, { requireEmail: true });
+    const problem = validateAppointmentForm(form, {
+      requireEmail: true,
+      clinic,
+    });
     if (problem)
       return res.status(400).json({ success: false, message: problem });
+
+    const doctor =
+      clinic.type === "hospital"
+        ? (clinic.doctors || []).find(
+            (d) => d.doctorId === str(form.doctorId) && d.active !== false,
+          )
+        : null;
 
     if (isDateOffForClinic(clinic, str(form.date))) {
       return res.status(400).json({
@@ -2486,7 +2636,7 @@ app.post(
     const otp = sixDigits();
     otpStore.set(otpKey(clinicId, form.email), {
       otp,
-      form: normalizeForm(form, "online"),
+      form: normalizeForm(form, "online", doctor),
       expires: Date.now() + OTP_TTL_MS,
       attempts: 0,
     });
@@ -2495,7 +2645,7 @@ app.post(
       to: str(form.email),
       subject:
         "OTP " + otp + " - verify your appointment at " + clinic.clinicName,
-      html: otpEmail(clinic, normalizeForm(form, "online"), otp),
+      html: otpEmail(clinic, normalizeForm(form, "online", doctor), otp),
     });
 
     if (!sent) {
@@ -2606,7 +2756,11 @@ app.get(
   clinicAuth,
   ah(async (req, res) => {
     const date = ymdOr(req.query.date, todayStr());
-    const base = { clinicId: req.clinicId, date };
+    const base = {
+      clinicId: req.clinicId,
+      date,
+      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
+    };
 
     const [total, visited, cancelled, emergency, walkIns, nextRow] =
       await Promise.all([
@@ -2658,7 +2812,10 @@ app.get(
   ah(async (req, res) => {
     const startDate = str(req.query.startDate);
     const endDate = str(req.query.endDate);
-    const base = { clinicId: req.clinicId };
+    const base = {
+      clinicId: req.clinicId,
+      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
+    };
     if (startDate || endDate) {
       base.date = {};
       if (startDate) base.date.$gte = startDate;
@@ -2761,7 +2918,10 @@ app.get(
   ah(async (req, res) => {
     const { date, startDate, endDate, search, status, quota, source } =
       req.query;
-    const query = { clinicId: req.clinicId };
+    const query = {
+      clinicId: req.clinicId,
+      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
+    };
 
     if (str(date)) query.date = str(date);
     else if (str(startDate) || str(endDate)) {
@@ -2812,7 +2972,12 @@ async function setStatus(req, res, status) {
       .json({ success: false, message: "Invalid appointment id." });
 
   const appointment = await Appointment.findOneAndUpdate(
-    { _id: id, clinicId: req.clinicId }, // clinic scope enforced here
+    {
+      _id: id,
+      clinicId: req.clinicId,
+      // A doctor-scoped session can only ever touch their own patients.
+      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
+    },
     // Stamp the visit time so the live queue knows who is being seen now, and
     // clear it on revert/cancel so a stale timestamp cannot win "now serving".
     status === "visited"
@@ -2962,9 +3127,6 @@ app.post(
     const body = req.body || {};
     const submitted = body.form || body.formData || body;
     const form = Object.assign({}, submitted, { date: todayStr() });
-    const problem = validateAppointmentForm(form, { walkIn: true });
-    if (problem)
-      return res.status(400).json({ success: false, message: problem });
 
     const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
@@ -2972,7 +3134,26 @@ app.post(
         .status(404)
         .json({ success: false, message: "Clinic not found." });
 
-    const appointment = await createAppointment(req.clinicId, form, "walk-in");
+    // A doctor adding their own walk-in never needs to pick themselves.
+    if (req.doctorId) form.doctorId = req.doctorId;
+
+    const problem = validateAppointmentForm(form, { walkIn: true, clinic });
+    if (problem)
+      return res.status(400).json({ success: false, message: problem });
+
+    const doctor =
+      clinic.type === "hospital"
+        ? (clinic.doctors || []).find(
+            (d) => d.doctorId === str(form.doctorId) && d.active !== false,
+          )
+        : null;
+
+    const appointment = await createAppointment(
+      req.clinicId,
+      form,
+      "walk-in",
+      doctor,
+    );
 
     if (appointment.email) {
       sendEmail({
@@ -3295,6 +3476,210 @@ app.delete(
       success: true,
       message: "Notice deleted.",
       notices: activeNotices(clinic),
+    });
+  }),
+);
+
+/* ---------------------------------------------------------- doctor roster -- */
+/* Hospital-only. A doctor-scoped token (req.doctorId set) is blocked from     */
+/* touching the roster - only the hospital's own admin login can manage it.    */
+
+function requireHospitalAdmin(req, res, next) {
+  if (req.doctorId)
+    return res.status(403).json({
+      success: false,
+      message: "Only the hospital's own admin login can manage doctors.",
+    });
+  next();
+}
+
+function publicDoctor(d) {
+  return {
+    id: d.doctorId,
+    name: d.name,
+    specialization: d.specialization,
+    photo: d.photo || "",
+    active: d.active !== false,
+    adminUserId: d.adminUserId,
+    createdAt: d.createdAt,
+  };
+}
+
+app.get(
+  "/api/admin/doctors",
+  clinicAuth,
+  requireHospitalAdmin,
+  ah(async (req, res) => {
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    if (clinic.type !== "hospital")
+      return res.status(400).json({
+        success: false,
+        message: "This clinic is not registered as a hospital.",
+      });
+    return res.json({
+      success: true,
+      doctors: (clinic.doctors || []).map(publicDoctor),
+    });
+  }),
+);
+
+app.post(
+  "/api/admin/doctors",
+  clinicAuth,
+  requireHospitalAdmin,
+  ah(async (req, res) => {
+    const body = req.body || {};
+    const name = str(body.name);
+    const specialization = str(body.specialization);
+    const adminUserId = str(body.adminUserId).toLowerCase();
+    const password = str(body.password);
+    const photo = str(body.photo);
+
+    if (!name || name.length < 2)
+      return res
+        .status(400)
+        .json({ success: false, message: "Please enter the doctor's name." });
+    if (!specialization)
+      return res
+        .status(400)
+        .json({ success: false, message: "Please enter a specialization." });
+    if (!/^[a-zA-Z0-9_.]{4,24}$/.test(adminUserId))
+      return res.status(400).json({
+        success: false,
+        message:
+          "Doctor login ID must be 4-24 characters (letters, numbers, dot or underscore).",
+      });
+    if (password.length < 6)
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long.",
+      });
+
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    if (clinic.type !== "hospital")
+      return res.status(400).json({
+        success: false,
+        message: "This clinic is not registered as a hospital.",
+      });
+
+    // adminUserId must be globally unique - the login screen has to find the
+    // right account from just the ID, across every clinic and every hospital.
+    if (await Clinic.exists({ adminUserId }))
+      return res
+        .status(409)
+        .json({ success: false, message: "That login ID is already taken." });
+    if (await Clinic.exists({ "doctors.adminUserId": adminUserId }))
+      return res
+        .status(409)
+        .json({ success: false, message: "That login ID is already taken." });
+
+    let doctorId = slugify(name) || "doctor";
+    if ((clinic.doctors || []).some((d) => d.doctorId === doctorId))
+      doctorId = doctorId + "-" + crypto.randomBytes(2).toString("hex");
+
+    clinic.doctors.push({
+      doctorId,
+      name,
+      specialization,
+      photo,
+      active: true,
+      adminUserId,
+      passwordHash: await bcrypt.hash(password, BCRYPT_ROUNDS),
+    });
+    await clinic.save();
+
+    return res.status(201).json({
+      success: true,
+      message: name + " has been added to your hospital.",
+      doctors: clinic.doctors.map(publicDoctor),
+    });
+  }),
+);
+
+app.put(
+  "/api/admin/doctors/:doctorId",
+  clinicAuth,
+  requireHospitalAdmin,
+  ah(async (req, res) => {
+    const doctorId = str(req.params.doctorId);
+    const body = req.body || {};
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+
+    const doc = (clinic.doctors || []).find((d) => d.doctorId === doctorId);
+    if (!doc)
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
+
+    if (body.name !== undefined) {
+      const name = str(body.name);
+      if (!name || name.length < 2)
+        return res.status(400).json({
+          success: false,
+          message: "Please enter the doctor's name.",
+        });
+      doc.name = name;
+    }
+    if (body.specialization !== undefined) {
+      const specialization = str(body.specialization);
+      if (!specialization)
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a specialization.",
+        });
+      doc.specialization = specialization;
+    }
+    if (body.photo !== undefined) doc.photo = str(body.photo);
+    if (body.active !== undefined) doc.active = Boolean(body.active);
+    if (body.password) {
+      if (str(body.password).length < 6)
+        return res.status(400).json({
+          success: false,
+          message: "Password must be at least 6 characters long.",
+        });
+      doc.passwordHash = await bcrypt.hash(str(body.password), BCRYPT_ROUNDS);
+    }
+
+    await clinic.save();
+    return res.json({
+      success: true,
+      message: "Doctor updated.",
+      doctors: clinic.doctors.map(publicDoctor),
+    });
+  }),
+);
+
+app.delete(
+  "/api/admin/doctors/:doctorId",
+  clinicAuth,
+  requireHospitalAdmin,
+  ah(async (req, res) => {
+    const doctorId = str(req.params.doctorId);
+    const clinic = await Clinic.findOneAndUpdate(
+      { clinicId: req.clinicId },
+      { $pull: { doctors: { doctorId } } },
+      { new: true },
+    );
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+    return res.json({
+      success: true,
+      message: "Doctor removed.",
+      doctors: (clinic.doctors || []).map(publicDoctor),
     });
   }),
 );
@@ -3679,11 +4064,13 @@ app.post(
     if (await Clinic.exists({ clinicId }))
       clinicId = clinicId + "-" + crypto.randomBytes(2).toString("hex");
 
+    const type = str(body.type) === "hospital" ? "hospital" : "solo";
     const clinic = await Clinic.create({
       clinicId,
       clinicName: str(body.clinicName),
-      doctorName: str(body.doctorName),
-      specialization: str(body.specialization),
+      type,
+      doctorName: type === "solo" ? str(body.doctorName) : "",
+      specialization: type === "solo" ? str(body.specialization) : "",
       address: str(body.address),
       city: str(body.city),
       phone: str(body.phone),
@@ -3739,6 +4126,16 @@ app.put(
       "timings",
     ]) {
       if (body[field] !== undefined) clinic[field] = str(body[field]);
+    }
+
+    if (body.type !== undefined) {
+      clinic.type = str(body.type) === "hospital" ? "hospital" : "solo";
+      // Converting solo -> hospital: a lone doctorName/specialization no
+      // longer applies, the roster in doctors[] takes over.
+      if (clinic.type === "hospital") {
+        clinic.doctorName = "";
+        clinic.specialization = "";
+      }
     }
 
     if (body.phone !== undefined) {

@@ -4885,6 +4885,12 @@ function HomePage({ go }) {
               </button>
               <button
                 className="btn btn-lg btn-soft"
+                onClick={() => go("/register?type=hospital")}
+              >
+                <Icon name="users" size={17} /> List your hospital
+              </button>
+              <button
+                className="btn btn-lg btn-soft"
                 onClick={() => go("/track")}
               >
                 <Icon name="activity" size={17} /> Live token queue
@@ -5210,9 +5216,36 @@ const QUOTAS = [
 
 const GENDERS = ["Male", "Female", "Other"];
 
-function PatientFields({ form, set, dates = [], walkIn = false }) {
+function PatientFields({
+  form,
+  set,
+  dates = [],
+  doctors = [],
+  walkIn = false,
+}) {
   return (
     <>
+      {doctors.length ? (
+        <div className="field">
+          <label>
+            Select Doctor <span className="req">*</span>
+          </label>
+          <select
+            className="select"
+            required
+            value={form.doctorId || ""}
+            onChange={(e) => set("doctorId", e.target.value)}
+          >
+            <option value="">Choose a doctor...</option>
+            {doctors.map((doc) => (
+              <option key={doc.id} value={doc.id}>
+                {doc.name} — {doc.specialization}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       <div className="field">
         <label>
           Appointment Quota <span className="req">*</span>
@@ -5815,7 +5848,12 @@ function BookingPage({ clinicId, go, notify }) {
               </p>
 
               <div className="form-grid">
-                <PatientFields form={form} set={set} dates={dates} />
+                <PatientFields
+                  form={form}
+                  set={set}
+                  dates={dates}
+                  doctors={clinic && clinic.doctors ? clinic.doctors : []}
+                />
               </div>
 
               {error ? (
@@ -6254,7 +6292,10 @@ function ImagePicker({
   );
 }
 
-function RegisterPage({ go, notify, onSession }) {
+function RegisterPage({ go, notify, onSession, initialType = "" }) {
+  const [type, setType] = useState(
+    initialType === "hospital" ? "hospital" : "solo",
+  );
   const [form, setForm] = useState({
     clinicName: "",
     doctorName: "",
@@ -6300,7 +6341,7 @@ function RegisterPage({ go, notify, onSession }) {
     const { confirm, ...payload } = form;
     const data = await api("/auth/register/send-otp", {
       method: "POST",
-      body: payload,
+      body: { ...payload, type },
     });
     setBusy(false);
     if (!data.success) {
@@ -6415,14 +6456,35 @@ function RegisterPage({ go, notify, onSession }) {
     <AuthShell go={go} mode="register">
       <form className="auth-card" onSubmit={sendCode} noValidate>
         <span className="eyebrow">
-          <Icon name="building" size={13} /> Step 1 of 2 - clinic details
+          <Icon name="building" size={13} /> Step 1 of 2 - listing details
         </span>
-        <h2>Register your clinic</h2>
+        <h2>
+          {type === "hospital"
+            ? "Register your hospital"
+            : "Register your clinic"}
+        </h2>
         <p className="lead">
           We email a 6-digit code to your admin address to confirm it is yours.
-          After verification your clinic is listed publicly and your dashboard
-          opens immediately.
+          After verification your listing is submitted for owner approval and
+          your dashboard opens immediately.
         </p>
+
+        <div className="chips" style={{ marginBottom: 18 }}>
+          <button
+            type="button"
+            className={"chip" + (type === "solo" ? " on" : "")}
+            onClick={() => setType("solo")}
+          >
+            Single clinic
+          </button>
+          <button
+            type="button"
+            className={"chip" + (type === "hospital" ? " on" : "")}
+            onClick={() => setType("hospital")}
+          >
+            Hospital (multiple doctors)
+          </button>
+        </div>
 
         <div className="form-grid">
           <div className="field">
@@ -6438,37 +6500,47 @@ function RegisterPage({ go, notify, onSession }) {
             />
           </div>
 
-          <div className="grid2">
-            <div className="field">
-              <label>
-                Doctor name <span className="req">*</span>
-              </label>
-              <input
-                className="input"
-                required
-                value={form.doctorName}
-                onChange={(e) => set("doctorName", e.target.value)}
-                placeholder="Dr. C S Gupta (MBBS)"
-              />
+          {type === "solo" ? (
+            <div className="grid2">
+              <div className="field">
+                <label>
+                  Doctor name <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  required
+                  value={form.doctorName}
+                  onChange={(e) => set("doctorName", e.target.value)}
+                  placeholder="Dr. C S Gupta (MBBS)"
+                />
+              </div>
+              <div className="field">
+                <label>
+                  Specialization <span className="req">*</span>
+                </label>
+                <select
+                  className="select"
+                  required
+                  value={form.specialization}
+                  onChange={(e) => set("specialization", e.target.value)}
+                >
+                  {SPECIALIZATIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div className="field">
-              <label>
-                Specialization <span className="req">*</span>
-              </label>
-              <select
-                className="select"
-                required
-                value={form.specialization}
-                onChange={(e) => set("specialization", e.target.value)}
-              >
-                {SPECIALIZATIONS.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
+          ) : (
+            <div style={{ marginBottom: 4 }}>
+              <Alert kind="info">
+                You'll add your doctors — name, specialization and their own
+                login — from the Doctors tab right after your hospital is
+                registered.
+              </Alert>
             </div>
-          </div>
+          )}
 
           <div className="field">
             <label>
@@ -7790,6 +7862,11 @@ function AdminDashboard({ routeClinicId, go, notify }) {
     ["queue", "Live queue status", "activity"],
     ["appointments", "Appointments", "list"],
     ["analytics", "Analytics", "chart"],
+    // Hospital admin only - a doctor-scoped login (clinic.doctor set) never
+    // sees this, since it can't manage the roster anyway.
+    ...(clinic && clinic.type === "hospital" && !clinic.doctor
+      ? [["doctors", "Doctors", "users"]]
+      : []),
     ["notices", "Notices & leave", "alert"],
     ["settings", "Clinic settings", "settings"],
   ];
@@ -8095,8 +8172,13 @@ function AdminDashboard({ routeClinicId, go, notify }) {
             <b title={clinic ? clinic.clinicName : ""}>
               {clinic ? clinic.clinicName : "Clinic"}
             </b>
-            <span title={clinic ? clinic.doctorName : ""}>
-              {clinic ? clinic.doctorName : ""}
+            <span title={clinic && clinic.doctor ? clinic.doctor.name : ""}>
+              {clinic && clinic.doctor
+                ? clinic.doctor.name + " · " + clinic.doctor.specialization
+                : clinic
+                  ? clinic.doctorName ||
+                    (clinic.type === "hospital" ? "Hospital admin" : "")
+                  : ""}
             </span>
           </div>
         </div>
@@ -8793,6 +8875,18 @@ function AdminDashboard({ routeClinicId, go, notify }) {
           ) : null}
 
           {/* ------------------------------------------------------ settings */}
+          {tab === "doctors" &&
+          clinic &&
+          clinic.type === "hospital" &&
+          !clinic.doctor ? (
+            <DoctorsTab
+              notify={notify}
+              onExpired={() =>
+                signOut("Your session expired. Please sign in again.")
+              }
+            />
+          ) : null}
+
           {tab === "notices" && clinic ? (
             <NoticesTab
               notify={notify}
@@ -8823,6 +8917,7 @@ function AdminDashboard({ routeClinicId, go, notify }) {
         <WalkInModal
           close={() => setWalkOpen(false)}
           notify={notify}
+          clinic={clinic}
           onExpired={() =>
             signOut("Your session expired. Please sign in again.")
           }
@@ -9466,7 +9561,7 @@ function LiveQueueTab({
 
 /* --------------------------------------------------------- walk-in modal -- */
 
-function WalkInModal({ close, notify, onAdded, onExpired }) {
+function WalkInModal({ close, notify, onAdded, onExpired, clinic }) {
   const [form, setForm] = useState({ ...EMPTY_FORM, date: todayISO() });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -9528,7 +9623,17 @@ function WalkInModal({ close, notify, onAdded, onExpired }) {
       }
     >
       <form id="walkin-form" onSubmit={submit} noValidate>
-        <PatientFields form={form} set={set} walkIn />
+        <PatientFields
+          form={form}
+          set={set}
+          walkIn
+          doctors={
+            // A doctor adding their own walk-in doesn't need to pick anyone.
+            clinic && clinic.type === "hospital" && !clinic.doctor
+              ? clinic.doctors || []
+              : []
+          }
+        />
         {error ? (
           <div style={{ marginTop: 16 }}>
             <Alert kind="err">{error}</Alert>
@@ -10712,6 +10817,350 @@ function NoticesTab({ notify, onExpired }) {
   );
 }
 
+function DoctorsTab({ notify, onExpired }) {
+  const [doctors, setDoctors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({
+    name: "",
+    specialization: "General Physician",
+    adminUserId: "",
+    password: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editForm, setEditForm] = useState({ name: "", specialization: "" });
+  const [editBusy, setEditBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const data = await api("/admin/doctors", { auth: true });
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      setError(data.message);
+      setLoading(false);
+      return;
+    }
+    setDoctors(data.doctors || []);
+    setLoading(false);
+  }, [onExpired]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const addDoctor = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError("");
+    const data = await api("/admin/doctors", {
+      method: "POST",
+      auth: true,
+      body: form,
+    });
+    setBusy(false);
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      setFormError(data.message);
+      return;
+    }
+    setDoctors(data.doctors || []);
+    setForm({
+      name: "",
+      specialization: "General Physician",
+      adminUserId: "",
+      password: "",
+    });
+    notify(data.message, "ok");
+  };
+
+  const toggleActive = async (doc) => {
+    const data = await api("/admin/doctors/" + encodeURIComponent(doc.id), {
+      method: "PUT",
+      auth: true,
+      body: { active: !doc.active },
+    });
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setDoctors(data.doctors || doctors);
+    notify(data.message, "ok");
+  };
+
+  const saveEdit = async (id) => {
+    setEditBusy(true);
+    const data = await api("/admin/doctors/" + encodeURIComponent(id), {
+      method: "PUT",
+      auth: true,
+      body: editForm,
+    });
+    setEditBusy(false);
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setDoctors(data.doctors || doctors);
+    setEditingId("");
+    notify(data.message, "ok");
+  };
+
+  const deleteDoctor = async (doc) => {
+    if (
+      !window.confirm(
+        "Remove " + doc.name + " from your hospital? This cannot be undone.",
+      )
+    )
+      return;
+    const data = await api("/admin/doctors/" + encodeURIComponent(doc.id), {
+      method: "DELETE",
+      auth: true,
+    });
+    if (data.unauthorized) {
+      onExpired();
+      return;
+    }
+    if (!data.success) {
+      notify(data.message, "err");
+      return;
+    }
+    setDoctors(data.doctors || doctors);
+    notify(data.message, "ok");
+  };
+
+  if (loading) return <Loading label="Loading your doctors" />;
+
+  return (
+    <div className="set-grid">
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Your doctors</h3>
+            <p className="small muted">
+              Each doctor gets their own login and only ever sees their own
+              patients. Patients pick a doctor from this list when booking.
+            </p>
+          </div>
+        </div>
+        <div className="panel-body stack">
+          {error ? <Alert kind="err">{error}</Alert> : null}
+          {doctors.length === 0 ? (
+            <p className="small muted">No doctors added yet.</p>
+          ) : (
+            doctors.map((doc) =>
+              editingId === doc.id ? (
+                <div className="panel" key={doc.id} style={{ padding: 12 }}>
+                  <div className="grid2">
+                    <div className="field">
+                      <label>Name</label>
+                      <input
+                        className="input"
+                        value={editForm.name}
+                        onChange={(e) =>
+                          setEditForm((c) => ({ ...c, name: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Specialization</label>
+                      <select
+                        className="select"
+                        value={editForm.specialization}
+                        onChange={(e) =>
+                          setEditForm((c) => ({
+                            ...c,
+                            specialization: e.target.value,
+                          }))
+                        }
+                      >
+                        {SPECIALIZATIONS.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="row">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={editBusy}
+                      onClick={() => saveEdit(doc.id)}
+                    >
+                      {editBusy ? <Spinner /> : "Save"}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setEditingId("")}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="row"
+                  key={doc.id}
+                  style={{
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <div>
+                    <b>{doc.name}</b>
+                    <span
+                      className="badge badge-soft"
+                      style={{ marginLeft: 8 }}
+                    >
+                      {doc.specialization}
+                    </span>
+                    {!doc.active ? (
+                      <span
+                        className="badge badge-soft"
+                        style={{ marginLeft: 6 }}
+                      >
+                        Inactive
+                      </span>
+                    ) : null}
+                    <div className="small muted">
+                      Login ID: {doc.adminUserId}
+                    </div>
+                  </div>
+                  <div className="row">
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => {
+                        setEditingId(doc.id);
+                        setEditForm({
+                          name: doc.name,
+                          specialization: doc.specialization,
+                        });
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => toggleActive(doc)}
+                    >
+                      {doc.active ? "Deactivate" : "Activate"}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => deleteDoctor(doc)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ),
+            )
+          )}
+
+          <form className="stack" onSubmit={addDoctor}>
+            <div className="grid2">
+              <div className="field">
+                <label>
+                  Doctor name <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  required
+                  value={form.name}
+                  onChange={(e) =>
+                    setForm((c) => ({ ...c, name: e.target.value }))
+                  }
+                  placeholder="Dr. C S Gupta (MBBS)"
+                />
+              </div>
+              <div className="field">
+                <label>
+                  Specialization <span className="req">*</span>
+                </label>
+                <select
+                  className="select"
+                  required
+                  value={form.specialization}
+                  onChange={(e) =>
+                    setForm((c) => ({ ...c, specialization: e.target.value }))
+                  }
+                >
+                  {SPECIALIZATIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>
+                  Login ID <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  required
+                  value={form.adminUserId}
+                  onChange={(e) =>
+                    setForm((c) => ({ ...c, adminUserId: e.target.value }))
+                  }
+                  placeholder="4-24 chars: letters, numbers, . or _"
+                />
+              </div>
+              <div className="field">
+                <label>
+                  Password <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  type="password"
+                  required
+                  value={form.password}
+                  onChange={(e) =>
+                    setForm((c) => ({ ...c, password: e.target.value }))
+                  }
+                  placeholder="At least 6 characters"
+                />
+              </div>
+            </div>
+            {formError ? <Alert kind="err">{formError}</Alert> : null}
+            <button className="btn btn-primary btn-block" disabled={busy}>
+              {busy ? (
+                <>
+                  <Spinner /> Adding doctor...
+                </>
+              ) : (
+                <>
+                  <Icon name="plus" size={16} /> Add doctor
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * ROOT
+ * ========================================================================== */
+
 /* ============================================================================
  * ROOT
  * ========================================================================== */
@@ -10894,6 +11343,7 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
   const editing = Boolean(clinic);
   const [form, setForm] = useState({
     clinicName: editing ? clinic.clinicName || "" : "",
+    type: editing ? clinic.type || "solo" : "solo",
     doctorName: editing ? clinic.doctorName || "" : "",
     specialization: editing
       ? clinic.specialization || "General Physician"
@@ -11004,34 +11454,69 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
         </div>
 
         <div className="field">
-          <label>
-            Doctor name <span className="req">*</span>
-          </label>
-          <input
-            className="input"
-            required
-            value={form.doctorName}
-            onChange={set("doctorName")}
-            placeholder="Dr. Arnav Tyagi (MBBS)"
-          />
+          <label>Listing type</label>
+          <div className="chips">
+            <button
+              type="button"
+              className={"chip" + (form.type === "solo" ? " on" : "")}
+              onClick={() =>
+                setForm((prev) => Object.assign({}, prev, { type: "solo" }))
+              }
+            >
+              Single clinic
+            </button>
+            <button
+              type="button"
+              className={"chip" + (form.type === "hospital" ? " on" : "")}
+              onClick={() =>
+                setForm((prev) => Object.assign({}, prev, { type: "hospital" }))
+              }
+            >
+              Hospital (multiple doctors)
+            </button>
+          </div>
         </div>
 
-        <div className="field">
-          <label>
-            Specialization <span className="req">*</span>
-          </label>
-          <select
-            className="select"
-            value={form.specialization}
-            onChange={set("specialization")}
-          >
-            {SPECIALIZATIONS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </div>
+        {form.type === "solo" ? (
+          <>
+            <div className="field">
+              <label>
+                Doctor name <span className="req">*</span>
+              </label>
+              <input
+                className="input"
+                required
+                value={form.doctorName}
+                onChange={set("doctorName")}
+                placeholder="Dr. Arnav Tyagi (MBBS)"
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                Specialization <span className="req">*</span>
+              </label>
+              <select
+                className="select"
+                value={form.specialization}
+                onChange={set("specialization")}
+              >
+                {SPECIALIZATIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        ) : (
+          <div className="field">
+            <Alert kind="info">
+              Doctors are added afterwards from that hospital's own Doctors
+              tab, not here.
+            </Alert>
+          </div>
+        )}
 
         <div className="field">
           <label>
@@ -12064,7 +12549,12 @@ export default function App() {
           <QueueTrackPage clinicId={route.id} go={go} />
         ) : null}
         {route.name === "register" ? (
-          <RegisterPage go={go} notify={notify} onSession={onSession} />
+          <RegisterPage
+            go={go}
+            notify={notify}
+            onSession={onSession}
+            initialType={route.query.type}
+          />
         ) : null}
         {route.name === "login" ? (
           <LoginPage go={go} notify={notify} onSession={onSession} />
