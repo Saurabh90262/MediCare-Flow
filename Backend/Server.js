@@ -213,6 +213,33 @@ const clinicSchema = new mongoose.Schema(
           },
           passwordHash: { type: String, required: true },
           createdAt: { type: Date, default: Date.now },
+          // This doctor's own closures/notices - completely separate from
+          // the hospital-wide ones below. A hospital-wide closure/notice
+          // still applies on top of these for every doctor.
+          weeklyOff: { type: [Number], default: [] },
+          leaveDates: {
+            type: [
+              {
+                date: { type: String, required: true },
+                publishNotice: { type: Boolean, default: false },
+              },
+            ],
+            default: [],
+          },
+          notices: {
+            type: [
+              {
+                message: { type: String, required: true, trim: true },
+                until: { type: String, default: "" },
+                always: { type: Boolean, default: false },
+                auto: { type: Boolean, default: false },
+                leaveDate: { type: String, default: "" },
+                createdAt: { type: Date, default: Date.now },
+                updatedAt: { type: Date, default: Date.now },
+              },
+            ],
+            default: [],
+          },
         },
       ],
       default: [],
@@ -314,12 +341,15 @@ const queueTokenSchema = new mongoose.Schema(
   {
     clinicId: { type: String, required: true },
     date: { type: String, required: true },
+    // "" for a solo clinic. A hospital's doctors each get their own counter,
+    // so two doctors at the same hospital can both be on "token 3" today.
+    doctorId: { type: String, default: "" },
     seq: { type: Number, default: 0 },
   },
   { timestamps: true, collection: "queuetokens" },
 );
 
-queueTokenSchema.index({ clinicId: 1, date: 1 }, { unique: true });
+queueTokenSchema.index({ clinicId: 1, date: 1, doctorId: 1 }, { unique: true });
 
 const Clinic = mongoose.model("Clinic", clinicSchema);
 const Appointment = mongoose.model("Appointment", appointmentSchema);
@@ -561,29 +591,38 @@ function dayOfWeek(ymd) {
 
 // True when `date` is inside this clinic's own closures - either a specific
 // leave date or a recurring weekly day off.
-function isDateOffForClinic(clinic, date) {
-  const weeklyOff = (clinic && clinic.weeklyOff) || [];
-  const leaveDates = (clinic && clinic.leaveDates) || [];
-  if (weeklyOff.includes(dayOfWeek(date))) return true;
-  return leaveDates.some((l) => l.date === date);
+// A date is off for a given doctor if EITHER the hospital itself is closed
+// that day (weeklyOff/leaveDates on the clinic), OR that specific doctor is
+// (their own weeklyOff/leaveDates). Pass doctor=null for a solo clinic, or
+// to check only the hospital-wide closures.
+function isDateOffFor(clinic, doctor, date) {
+  const day = dayOfWeek(date);
+  const clinicWeeklyOff = (clinic && clinic.weeklyOff) || [];
+  const clinicLeave = (clinic && clinic.leaveDates) || [];
+  if (clinicWeeklyOff.includes(day)) return true;
+  if (clinicLeave.some((l) => l.date === date)) return true;
+  if (doctor) {
+    const docWeeklyOff = doctor.weeklyOff || [];
+    const docLeave = doctor.leaveDates || [];
+    if (docWeeklyOff.includes(day)) return true;
+    if (docLeave.some((l) => l.date === date)) return true;
+  }
+  return false;
 }
 
-// The booking window, tagged with which dates this specific clinic has
-// closed. Used by the public booking page and its own admin panel.
-function clinicAvailableDates(clinic) {
+function availableDatesFor(clinic, doctor) {
   return getAvailableDates().map((value) => ({
     value,
     label: dateLabel(value),
-    off: isDateOffForClinic(clinic, value),
+    off: isDateOffFor(clinic, doctor, value),
   }));
 }
 
-// Notices currently visible on this clinic's booking page: "always" notices,
-// plus dated ones whose `until` date has not passed yet.
-function activeNotices(clinic) {
+// `tag` is who published it - the doctor's name, or the hospital/clinic name
+// for a hospital-wide notice - so the booking page can label each one.
+function activeNoticesFrom(list, tag) {
   const today = todayStr();
-  const list = (clinic && clinic.notices) || [];
-  return list
+  return (list || [])
     .filter((n) => n.always || (n.until && n.until >= today))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .map((n) => ({
@@ -592,6 +631,7 @@ function activeNotices(clinic) {
       until: n.until || "",
       always: Boolean(n.always),
       auto: Boolean(n.auto),
+      by: tag,
       createdAt: n.createdAt,
       updatedAt: n.updatedAt,
     }));
@@ -664,7 +704,8 @@ function publicClinic(clinic) {
     type: raw.type || "solo",
     doctorName: isHospital ? "" : raw.doctorName,
     specialization: isHospital ? "" : raw.specialization,
-    // Public, patient-facing roster: active doctors only.
+    // Each doctor carries their OWN available dates and OWN notices, fully
+    // isolated from every other doctor at the same hospital.
     doctors: isHospital
       ? (raw.doctors || [])
           .filter((d) => d.active !== false)
@@ -673,6 +714,8 @@ function publicClinic(clinic) {
             name: d.name,
             specialization: d.specialization,
             photo: d.photo || "",
+            dates: availableDatesFor(raw, d),
+            notices: activeNoticesFrom(d.notices, d.name),
           }))
       : [],
     address: raw.address,
@@ -1081,18 +1124,19 @@ function validateRegistration(body) {
 
 // Seeds the counter from real appointments so a fresh counter can never reuse a
 // number that already exists (e.g. after old counter docs were removed).
-async function seedCounter(clinicId, date) {
-  const existing = await QueueToken.findOne({ clinicId, date }).lean();
+async function seedCounter(clinicId, date, doctorId) {
+  const key = { clinicId, date, doctorId };
+  const existing = await QueueToken.findOne(key).lean();
   if (existing) return;
-  const last = await Appointment.find({ clinicId, date })
+  const last = await Appointment.find({ clinicId, date, doctorId })
     .sort({ bookingNumber: -1 })
     .limit(1)
     .lean();
   const start = last.length ? Number(last[0].bookingNumber) || 0 : 0;
   try {
     await QueueToken.updateOne(
-      { clinicId, date },
-      { $setOnInsert: { clinicId, date, seq: start } },
+      key,
+      { $setOnInsert: Object.assign({ seq: start }, key) },
       { upsert: true },
     );
   } catch (error) {
@@ -1100,11 +1144,15 @@ async function seedCounter(clinicId, date) {
   }
 }
 
-// Atomic, sequential, per clinic per day. Walk-ins and online bookings share it.
-async function getNextBookingNumber(clinicId, date) {
-  await seedCounter(clinicId, date);
+// Atomic, sequential, per clinic+doctor per day. doctorId is "" for a solo
+// clinic, so its numbering is completely unaffected. A hospital's doctors
+// each get their own independent sequence - walk-ins and online bookings for
+// that one doctor share it.
+async function getNextBookingNumber(clinicId, date, doctorId) {
+  const key = { clinicId, date, doctorId: doctorId || "" };
+  await seedCounter(clinicId, date, key.doctorId);
   const counter = await QueueToken.findOneAndUpdate(
-    { clinicId, date },
+    key,
     { $inc: { seq: 1 } },
     { new: true, upsert: true, setDefaultsOnInsert: true },
   );
@@ -1113,7 +1161,7 @@ async function getNextBookingNumber(clinicId, date) {
 
 async function createAppointment(clinicId, form, source, doctor, attempt = 1) {
   const data = normalizeForm(form, source, doctor);
-  const bookingNumber = await getNextBookingNumber(clinicId, data.date);
+  const bookingNumber = await getNextBookingNumber(clinicId, data.date, data.doctorId);
   try {
     return await Appointment.create(
       Object.assign(
@@ -1564,8 +1612,15 @@ const DEFAULT_CONSULT_MINUTES = 8;
 // The heart of the live queue. "Now serving" is the most recently stamped
 // visit rather than the highest token, so reverting a token or seeing an
 // emergency case out of order still reports the correct current patient.
-async function liveQueue(clinicId, date) {
-  const rows = await Appointment.find({ clinicId, date })
+async function liveQueue(clinicId, date, doctorId) {
+
+  const scope = {
+    clinicId,
+    date,
+    ...(doctorId ? { doctorId } : {}),
+  };
+
+  const rows = await Appointment.find(scope)
     .select("bookingNumber status quota source visitedAt updatedAt")
     .sort({ bookingNumber: 1 })
     .lean();
@@ -1760,26 +1815,34 @@ app.get(
   "/api/clinics/:clinicId",
   ah(async (req, res) => {
     const clinic = await Clinic.findOne(
-      Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter()),
+      Object.assign(
+        { clinicId: str(req.params.clinicId) },
+        bookableFilter(),
+      ),
     ).lean();
+
     if (!clinic)
       return res
         .status(404)
-        .json({ success: false, message: "This clinic could not be found." });
-    const snapshot = await queueSnapshot([clinic.clinicId]);
+        .json({
+          success: false,
+          message: "This clinic could not be found.",
+        });
+
     return res.json({
       success: true,
-      clinic: Object.assign(publicClinic(clinic), {
-        todayQueue: snapshot[clinic.clinicId] || {
-          booked: 0,
-          visited: 0,
-          waiting: 0,
-          nextToken: null,
-        },
-      }),
+      clinic: publicClinic(clinic),
       today: todayStr(),
-      dates: clinicAvailableDates(clinic),
-      notices: activeNotices(clinic),
+
+      dates:
+        clinic.type === "hospital"
+          ? []
+          : availableDatesFor(clinic, null),
+
+      notices: activeNoticesFrom(
+        clinic.notices,
+        clinic.clinicName
+      ),
     });
   }),
 );
@@ -1799,15 +1862,20 @@ app.get(
         .json({ success: false, message: "This clinic could not be found." });
 
     const date = ymdOr(req.query.date, todayStr());
-    const live = await liveQueue(clinic.clinicId, date);
+    const doctorId = str(req.query.doctorId);
+    const live = await liveQueue(clinic.clinicId, date, doctorId);
+    const doctor =
+      doctorId && clinic.type === "hospital"
+        ? (clinic.doctors || []).find((d) => d.doctorId === doctorId)
+        : null;
 
     return res.json({
       success: true,
       clinic: {
         clinicId: clinic.clinicId,
         clinicName: clinic.clinicName,
-        doctorName: clinic.doctorName,
-        specialization: clinic.specialization,
+        doctorName: doctor ? doctor.name : clinic.doctorName,
+        specialization: doctor ? doctor.specialization : clinic.specialization,
         address: clinic.address,
         phone: clinic.phone,
       },
@@ -1863,7 +1931,12 @@ app.get(
         source: r.source,
         clinicId: r.clinicId,
         clinicName: byId[r.clinicId] ? byId[r.clinicId].clinicName : "Clinic",
-        doctorName: byId[r.clinicId] ? byId[r.clinicId].doctorName : "",
+        doctorId: r.doctorId || "",
+        doctorName: r.doctorId
+          ? r.doctorName
+          : byId[r.clinicId]
+            ? byId[r.clinicId].doctorName
+            : "",
         address: byId[r.clinicId] ? byId[r.clinicId].address : "",
       })),
     });
@@ -2480,7 +2553,7 @@ app.post(
           )
         : null;
 
-    if (isDateOffForClinic(clinic, str(form.date))) {
+    if (isDateOffFor(clinic, doctor, str(form.date))) {
       return res.status(400).json({
         success: false,
         message:
@@ -2609,7 +2682,7 @@ app.post(
           )
         : null;
 
-    if (isDateOffForClinic(clinic, str(form.date))) {
+    if (isDateOffFor(clinic, doctor, str(form.date))) {
       return res.status(400).json({
         success: false,
         message:
@@ -2751,88 +2824,17 @@ app.post(
 /* Every query below is filtered by req.clinicId, which comes ONLY from the     */
 /* verified JWT. A clinic can never read or write another clinic's data.       */
 
-app.get(
-  "/api/admin/stats",
-  clinicAuth,
-  ah(async (req, res) => {
-    const date = ymdOr(req.query.date, todayStr());
-    const base = {
-      clinicId: req.clinicId,
-      date,
-      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
-    };
+// Shared by the solo/single-doctor view AND the hospital-admin per-doctor
+// cards below - same numbers, computed once, scoped by an optional doctorId.
+async function computeDayStats(clinicId, date, doctorId) {
+  const base = {
+    clinicId,
+    date,
+    ...(doctorId ? { doctorId } : {}),
+  };
 
-    const [total, visited, cancelled, emergency, walkIns, nextRow] =
-      await Promise.all([
-        Appointment.countDocuments(
-          Object.assign({}, base, { status: { $ne: "cancelled" } }),
-        ),
-        Appointment.countDocuments(
-          Object.assign({}, base, { status: "visited" }),
-        ),
-        Appointment.countDocuments(
-          Object.assign({}, base, { status: "cancelled" }),
-        ),
-        Appointment.countDocuments(
-          Object.assign({}, base, {
-            status: { $ne: "cancelled" },
-            quota: "Emergency",
-          }),
-        ),
-        Appointment.countDocuments(
-          Object.assign({}, base, {
-            status: { $ne: "cancelled" },
-            source: "walk-in",
-          }),
-        ),
-        Appointment.find(Object.assign({}, base, { status: "booked" }))
-          .sort({ bookingNumber: 1 })
-          .limit(1)
-          .lean(),
-      ]);
-
-    return res.json({
-      success: true,
-      date,
-      dateLabel: dateLabel(date),
-      total,
-      visited,
-      remaining: Math.max(0, total - visited),
-      cancelled,
-      emergency,
-      walkIns,
-      nextToken: nextRow.length ? nextRow[0].bookingNumber : null,
-    });
-  }),
-);
-
-app.get(
-  "/api/admin/analytics",
-  clinicAuth,
-  ah(async (req, res) => {
-    const startDate = str(req.query.startDate);
-    const endDate = str(req.query.endDate);
-    const base = {
-      clinicId: req.clinicId,
-      ...(req.doctorId ? { doctorId: req.doctorId } : {}),
-    };
-    if (startDate || endDate) {
-      base.date = {};
-      if (startDate) base.date.$gte = startDate;
-      if (endDate) base.date.$lte = endDate;
-    }
-
-    const [
-      total,
-      visited,
-      cancelled,
-      visitedGeneral,
-      visitedEmergency,
-      remainingGeneral,
-      remainingEmergency,
-      walkIns,
-      online,
-    ] = await Promise.all([
+  const [total, visited, cancelled, emergency, walkIns, nextRow] =
+    await Promise.all([
       Appointment.countDocuments(
         Object.assign({}, base, { status: { $ne: "cancelled" } }),
       ),
@@ -2843,16 +2845,10 @@ app.get(
         Object.assign({}, base, { status: "cancelled" }),
       ),
       Appointment.countDocuments(
-        Object.assign({}, base, { status: "visited", quota: "General" }),
-      ),
-      Appointment.countDocuments(
-        Object.assign({}, base, { status: "visited", quota: "Emergency" }),
-      ),
-      Appointment.countDocuments(
-        Object.assign({}, base, { status: "booked", quota: "General" }),
-      ),
-      Appointment.countDocuments(
-        Object.assign({}, base, { status: "booked", quota: "Emergency" }),
+        Object.assign({}, base, {
+          status: { $ne: "cancelled" },
+          quota: "Emergency",
+        }),
       ),
       Appointment.countDocuments(
         Object.assign({}, base, {
@@ -2860,55 +2856,195 @@ app.get(
           source: "walk-in",
         }),
       ),
-      Appointment.countDocuments(
-        Object.assign({}, base, {
-          status: { $ne: "cancelled" },
-          source: "online",
-        }),
-      ),
+      Appointment.find(Object.assign({}, base, { status: "booked" }))
+        .sort({ bookingNumber: 1 })
+        .limit(1)
+        .lean(),
     ]);
 
-    const trendRows = await Appointment.aggregate([
-      { $match: base },
-      {
-        $group: {
-          _id: "$date",
-          total: { $sum: { $cond: [{ $ne: ["$status", "cancelled"] }, 1, 0] } },
-          visited: { $sum: { $cond: [{ $eq: ["$status", "visited"] }, 1, 0] } },
-          cancelled: {
-            $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] },
-          },
-          emergency: {
-            $sum: { $cond: [{ $eq: ["$quota", "Emergency"] }, 1, 0] },
-          },
+  return {
+    total,
+    visited,
+    remaining: Math.max(0, total - visited),
+    cancelled,
+    emergency,
+    walkIns,
+    nextToken: nextRow.length ? nextRow[0].bookingNumber : null,
+  };
+}
+
+app.get(
+  "/api/admin/stats",
+  clinicAuth,
+  ah(async (req, res) => {
+    const date = ymdOr(req.query.date, todayStr());
+    const stats = await computeDayStats(req.clinicId, date, req.doctorId || "");
+
+    // Hospital admin (no doctorId claim): add a per-doctor breakdown
+    // alongside the whole-hospital total above, for card-format display.
+    let doctors;
+    if (!req.doctorId) {
+      const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+      if (clinic && clinic.type === "hospital") {
+        doctors = await Promise.all(
+          (clinic.doctors || []).map(async (d) => ({
+            doctorId: d.doctorId,
+            name: d.name,
+            specialization: d.specialization,
+            active: d.active !== false,
+            ...(await computeDayStats(req.clinicId, date, d.doctorId)),
+          })),
+        );
+      }
+    }
+
+    return res.json(
+      Object.assign(
+        { success: true, date, dateLabel: dateLabel(date) },
+        stats,
+        doctors ? { doctors } : {},
+      ),
+    );
+  }),
+);
+
+async function computeAnalytics(clinicId, doctorId, startDate, endDate) {
+  const base = {
+    clinicId,
+    ...(doctorId ? { doctorId } : {}),
+  };
+  if (startDate || endDate) {
+    base.date = {};
+    if (startDate) base.date.$gte = startDate;
+    if (endDate) base.date.$lte = endDate;
+  }
+
+  const [
+    total,
+    visited,
+    cancelled,
+    visitedGeneral,
+    visitedEmergency,
+    remainingGeneral,
+    remainingEmergency,
+    walkIns,
+    online,
+  ] = await Promise.all([
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: { $ne: "cancelled" } }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "visited" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "cancelled" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "visited", quota: "General" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "visited", quota: "Emergency" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "booked", quota: "General" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, { status: "booked", quota: "Emergency" }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, {
+        status: { $ne: "cancelled" },
+        source: "walk-in",
+      }),
+    ),
+    Appointment.countDocuments(
+      Object.assign({}, base, {
+        status: { $ne: "cancelled" },
+        source: "online",
+      }),
+    ),
+  ]);
+
+  const trendRows = await Appointment.aggregate([
+    { $match: base },
+    {
+      $group: {
+        _id: "$date",
+        total: { $sum: { $cond: [{ $ne: ["$status", "cancelled"] }, 1, 0] } },
+        visited: { $sum: { $cond: [{ $eq: ["$status", "visited"] }, 1, 0] } },
+        cancelled: {
+          $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] },
+        },
+        emergency: {
+          $sum: { $cond: [{ $eq: ["$quota", "Emergency"] }, 1, 0] },
         },
       },
-      { $sort: { _id: 1 } },
-      { $limit: 60 },
-    ]);
+    },
+    { $sort: { _id: 1 } },
+    { $limit: 60 },
+  ]);
 
-    return res.json({
-      success: true,
-      range: { startDate: startDate || null, endDate: endDate || null },
-      total,
-      visited,
-      remaining: Math.max(0, total - visited),
-      cancelled,
-      visitedGeneral,
-      visitedEmergency,
-      remainingGeneral,
-      remainingEmergency,
-      walkIns,
-      online,
-      trend: trendRows.map((r) => ({
-        date: r._id,
-        label: dateLabel(r._id),
-        total: r.total,
-        visited: r.visited,
-        cancelled: r.cancelled,
-        emergency: r.emergency,
-      })),
-    });
+  return {
+    total,
+    visited,
+    remaining: Math.max(0, total - visited),
+    cancelled,
+    visitedGeneral,
+    visitedEmergency,
+    remainingGeneral,
+    remainingEmergency,
+    walkIns,
+    online,
+    trend: trendRows.map((r) => ({
+      date: r._id,
+      label: dateLabel(r._id),
+      total: r.total,
+      visited: r.visited,
+      cancelled: r.cancelled,
+      emergency: r.emergency,
+    })),
+  };
+}
+
+app.get(
+  "/api/admin/analytics",
+  clinicAuth,
+  ah(async (req, res) => {
+    const startDate = str(req.query.startDate);
+    const endDate = str(req.query.endDate);
+    const analytics = await computeAnalytics(
+      req.clinicId,
+      req.doctorId || "",
+      startDate,
+      endDate,
+    );
+
+    let doctors;
+    if (!req.doctorId) {
+      const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+      if (clinic && clinic.type === "hospital") {
+        doctors = await Promise.all(
+          (clinic.doctors || []).map(async (d) => ({
+            doctorId: d.doctorId,
+            name: d.name,
+            specialization: d.specialization,
+            active: d.active !== false,
+            ...(await computeAnalytics(req.clinicId, d.doctorId, startDate, endDate)),
+          })),
+        );
+      }
+    }
+
+    return res.json(
+      Object.assign(
+        {
+          success: true,
+          range: { startDate: startDate || null, endDate: endDate || null },
+        },
+        analytics,
+        doctors ? { doctors } : {},
+      ),
+    );
   }),
 );
 
@@ -3021,21 +3157,53 @@ async function setStatus(req, res, status) {
   });
 }
 
-// Pebble grid feed: every token from 1..maxToken for the date, including gaps
-// (marked "empty") so the dial-pad layout never skips a position.
-app.get(
+  // Pebble grid feed: every token from 1..maxToken for the date, including gaps
+  // (marked "empty") so the dial-pad layout never skips a position.
+  app.get(
   "/api/admin/queue",
   clinicAuth,
   ah(async (req, res) => {
     const date = ymdOr(req.query.date, todayStr());
-    const live = await liveQueue(req.clinicId, date);
-    const rows = await Appointment.find({ clinicId: req.clinicId, date })
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId }).lean();
+    if (!clinic)
+      return res
+        .status(404)
+        .json({ success: false, message: "Clinic not found." });
+
+    // Hospital admin (no doctorId claim): one read-only summary card per
+    // doctor - never the interactive grid, since acting on a patient is each
+    // doctor's own job, not the hospital admin's.
+    if (!req.doctorId && clinic.type === "hospital") {
+      const doctors = await Promise.all(
+        (clinic.doctors || []).map(async (d) => ({
+          doctorId: d.doctorId,
+          name: d.name,
+          specialization: d.specialization,
+          active: d.active !== false,
+          live: await liveQueue(req.clinicId, date, d.doctorId),
+        })),
+      );
+      return res.json({ success: true, date, dateLabel: dateLabel(date), doctors });
+    }
+
+    // Solo clinic, or one specific doctor's own login: the familiar
+    // interactive grid, scoped to just their own patients.
+    const doctorId = req.doctorId || "";
+    const live = await liveQueue(req.clinicId, date, doctorId);
+    const rows = await Appointment.find({
+      clinicId: req.clinicId,
+      date,
+      ...(doctorId ? { doctorId } : {}),
+    })
       .sort({ bookingNumber: 1 })
       .lean();
 
-    const byToken = {};
-    for (const row of rows) {
-      byToken[row.bookingNumber] = {
+    return res.json({
+      success: true,
+      date,
+      dateLabel: dateLabel(date),
+      live,
+      tokens: rows.map((row) => ({
         id: String(row._id),
         bookingId: row.bookingId,
         bookingNumber: row.bookingNumber,
@@ -3049,72 +3217,55 @@ app.get(
         source: row.source,
         weight: row.weight,
         address: row.address,
-        date: row.date,
-        dateLabel: dateLabel(row.date),
         visitedAt: row.visitedAt || null,
-      };
-    }
-
-    const tokens = [];
-    for (let n = 1; n <= live.maxToken; n += 1) {
-      tokens.push(byToken[n] || { bookingNumber: n, status: "empty" });
-    }
-
-    const summary = Object.assign({}, live);
-    delete summary.tokens;
-
-    return res.json({
-      success: true,
-      date,
-      dateLabel: dateLabel(date),
-      live: summary,
-      tokens,
+        doctorName: row.doctorName || "",
+      })),
     });
   }),
 );
 
-app.put(
-  "/api/admin/appointments/:id/visited",
-  clinicAuth,
-  ah((req, res) => setStatus(req, res, "visited")),
-);
-app.put(
-  "/api/admin/appointments/:id/unvisited",
-  clinicAuth,
-  ah((req, res) => setStatus(req, res, "booked")),
-);
-app.put(
-  "/api/admin/appointments/:id/cancel",
-  clinicAuth,
-  ah((req, res) => setStatus(req, res, "cancelled")),
-);
+  app.put(
+    "/api/admin/appointments/:id/visited",
+    clinicAuth,
+    ah((req, res) => setStatus(req, res, "visited")),
+  );
+  app.put(
+    "/api/admin/appointments/:id/unvisited",
+    clinicAuth,
+    ah((req, res) => setStatus(req, res, "booked")),
+  );
+  app.put(
+    "/api/admin/appointments/:id/cancel",
+    clinicAuth,
+    ah((req, res) => setStatus(req, res, "cancelled")),
+  );
 
-app.get(
-  "/api/admin/appointments/:id",
-  clinicAuth,
-  ah(async (req, res) => {
-    const id = str(req.params.id);
-    if (!mongoose.isValidObjectId(id))
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid appointment id." });
-    const appointment = await Appointment.findOne({
-      _id: id,
-      clinicId: req.clinicId,
-    }).lean();
-    if (!appointment)
-      return res.status(404).json({
-        success: false,
-        message: "Appointment not found for this clinic.",
+  app.get(
+    "/api/admin/appointments/:id",
+    clinicAuth,
+    ah(async (req, res) => {
+      const id = str(req.params.id);
+      if (!mongoose.isValidObjectId(id))
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid appointment id." });
+      const appointment = await Appointment.findOne({
+        _id: id,
+        clinicId: req.clinicId,
+      }).lean();
+      if (!appointment)
+        return res.status(404).json({
+          success: false,
+          message: "Appointment not found for this clinic.",
+        });
+      return res.json({
+        success: true,
+        appointment: Object.assign({}, appointment, {
+          dateLabel: dateLabel(appointment.date),
+        }),
       });
-    return res.json({
-      success: true,
-      appointment: Object.assign({}, appointment, {
-        dateLabel: dateLabel(appointment.date),
-      }),
-    });
-  }),
-);
+    }),
+  );
 
 // Reception walk-in entry: shares the exact same per-clinic-per-day counter as
 // online bookings, so both are interleaved in one queue by arrival order.
@@ -3261,11 +3412,21 @@ app.get(
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
+
+    // A doctor's own login manages only their own subdocument. Everyone else
+    // (a solo clinic, or the hospital's own admin) manages the clinic-wide
+    // one, which every doctor's closures stack on top of.
+    const scope = req.doctorId
+      ? (clinic.doctors || []).find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !scope)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+
     return res.json({
       success: true,
-      dates: clinicAvailableDates(clinic),
-      weeklyOff: clinic.weeklyOff || [],
-      notices: (clinic.notices || [])
+      dates: availableDatesFor(clinic, req.doctorId ? scope : null),
+      weeklyOff: (scope && scope.weeklyOff) || [],
+      notices: ((scope && scope.notices) || [])
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .map((n) => ({
           id: String(n._id),
@@ -3305,20 +3466,28 @@ app.put(
         .status(404)
         .json({ success: false, message: "Clinic not found." });
 
-    clinic.leaveDates = (clinic.leaveDates || []).filter(
-      (l) => l.date !== date,
-    );
-    // Any auto-notice tied to this date is cleared first - reopening the
-    // date must never leave a stale "clinic closed" notice behind.
-    clinic.notices = (clinic.notices || []).filter(
+    const target = req.doctorId
+      ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+    const tag = req.doctorId ? target.name : clinic.clinicName;
+
+    target.leaveDates = (target.leaveDates || []).filter((l) => l.date !== date);
+    target.notices = (target.notices || []).filter(
       (n) => !(n.auto && n.leaveDate === date),
     );
 
     if (off) {
-      clinic.leaveDates.push({ date, publishNotice });
+      target.leaveDates.push({ date, publishNotice });
       if (publishNotice) {
-        clinic.notices.push({
-          message: "The clinic will remain closed on " + longDate(date) + ".",
+        target.notices.push({
+          message:
+            (req.doctorId
+              ? tag + " will be unavailable on "
+              : "The clinic will remain closed on ") +
+            longDate(date) +
+            ".",
           until: date,
           always: false,
           auto: true,
@@ -3330,11 +3499,9 @@ app.put(
     await clinic.save();
     return res.json({
       success: true,
-      message: off
-        ? "That date is now marked closed."
-        : "That date is open again.",
-      dates: clinicAvailableDates(clinic),
-      notices: activeNotices(clinic),
+      message: off ? "That date is now marked closed." : "That date is open again.",
+      dates: availableDatesFor(clinic, req.doctorId ? target : null),
+      notices: activeNoticesFrom(target.notices, tag),
     });
   }),
 );
@@ -3350,20 +3517,27 @@ app.put(
         raw.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6),
       ),
     );
-    const clinic = await Clinic.findOneAndUpdate(
-      { clinicId: req.clinicId },
-      { weeklyOff: days },
-      { new: true },
-    );
+
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
+
+    const target = req.doctorId
+      ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+
+    target.weeklyOff = days;
+    await clinic.save();
+
     return res.json({
       success: true,
       message: "Weekly off days updated.",
-      weeklyOff: clinic.weeklyOff,
-      dates: clinicAvailableDates(clinic),
+      weeklyOff: target.weeklyOff,
+      dates: availableDatesFor(clinic, req.doctorId ? target : null),
     });
   }),
 );
@@ -3386,19 +3560,26 @@ app.post(
           "Choose a date for the notice to show until, or select Always.",
       });
 
-    const clinic = await Clinic.findOneAndUpdate(
-      { clinicId: req.clinicId },
-      { $push: { notices: { message, until, always, auto: false } } },
-      { new: true },
-    );
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
+
+    const target = req.doctorId
+      ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+    const tag = req.doctorId ? target.name : clinic.clinicName;
+
+    target.notices.push({ message, until, always, auto: false });
+    await clinic.save();
+
     return res.status(201).json({
       success: true,
       message: "Notice published.",
-      notices: activeNotices(clinic),
+      notices: activeNoticesFrom(target.notices, tag),
     });
   }),
 );
@@ -3427,29 +3608,35 @@ app.put(
           "Choose a date for the notice to show until, or select Always.",
       });
 
-    const clinic = await Clinic.findOneAndUpdate(
-      { clinicId: req.clinicId, "notices._id": id },
-      {
-        $set: {
-          "notices.$.message": message,
-          "notices.$.always": always,
-          "notices.$.until": until,
-          "notices.$.updatedAt": new Date(),
-          // Hand-editing detaches it from whichever leave date created it.
-          "notices.$.auto": false,
-          "notices.$.leaveDate": "",
-        },
-      },
-      { new: true },
-    );
+       const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
       return res
         .status(404)
-        .json({ success: false, message: "Notice not found." });
+        .json({ success: false, message: "Clinic not found." });
+
+    const target = req.doctorId
+      ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+    const tag = req.doctorId ? target.name : clinic.clinicName;
+
+    const notice = (target.notices || []).find((n) => String(n._id) === id);
+    if (!notice)
+      return res.status(404).json({ success: false, message: "Notice not found." });
+
+    notice.message = message;
+    notice.always = always;
+    notice.until = until;
+    notice.updatedAt = new Date();
+    notice.auto = false;
+    notice.leaveDate = "";
+
+    await clinic.save();
     return res.json({
       success: true,
       message: "Notice updated.",
-      notices: activeNotices(clinic),
+      notices: activeNoticesFrom(target.notices, tag),
     });
   }),
 );
@@ -3463,19 +3650,26 @@ app.delete(
       return res
         .status(400)
         .json({ success: false, message: "Invalid notice id." });
-    const clinic = await Clinic.findOneAndUpdate(
-      { clinicId: req.clinicId },
-      { $pull: { notices: { _id: id } } },
-      { new: true },
-    );
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
+
+    const target = req.doctorId
+      ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res.status(404).json({ success: false, message: "Doctor not found." });
+    const tag = req.doctorId ? target.name : clinic.clinicName;
+
+    target.notices = (target.notices || []).filter((n) => String(n._id) !== id);
+    await clinic.save();
+
     return res.json({
       success: true,
       message: "Notice deleted.",
-      notices: activeNotices(clinic),
+      notices: activeNoticesFrom(target.notices, tag),
     });
   }),
 );

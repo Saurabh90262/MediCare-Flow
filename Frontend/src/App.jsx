@@ -5221,11 +5221,12 @@ function PatientFields({
   set,
   dates = [],
   doctors = [],
+  showDoctorPicker = false,
   walkIn = false,
 }) {
   return (
     <>
-      {doctors.length ? (
+      {showDoctorPicker ? (
         <div className="field">
           <label>
             Select Doctor <span className="req">*</span>
@@ -5236,13 +5237,21 @@ function PatientFields({
             value={form.doctorId || ""}
             onChange={(e) => set("doctorId", e.target.value)}
           >
-            <option value="">Choose a doctor...</option>
+            <option value="">
+              {doctors.length ? "Choose a doctor..." : "No doctors available yet"}
+            </option>
             {doctors.map((doc) => (
               <option key={doc.id} value={doc.id}>
                 {doc.name} — {doc.specialization}
               </option>
             ))}
           </select>
+          {!doctors.length ? (
+            <span className="small muted">
+              This hospital hasn't added any doctors yet — booking isn't
+              possible until it does.
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -5516,6 +5525,14 @@ function BookingPage({ clinicId, go, notify }) {
   const [clinic, setClinic] = useState(null);
   const [dates, setDates] = useState([]);
   const [notices, setNotices] = useState([]);
+
+  const isHospital = Boolean(clinic && clinic.type === "hospital");
+  const selectedDoctor = isHospital
+    ? (clinic.doctors || []).find((d) => d.id === form.doctorId)
+    : null;
+  const boardNotices = isHospital
+    ? notices.concat(selectedDoctor ? selectedDoctor.notices || [] : [])
+    : notices;
   const [fatal, setFatal] = useState("");
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -5529,6 +5546,20 @@ function BookingPage({ clinicId, go, notify }) {
 
   const set = (key, value) =>
     setForm((current) => ({ ...current, [key]: value }));
+
+  useEffect(() => {
+  if (!isHospital) return;
+
+  const list = selectedDoctor ? selectedDoctor.dates || [] : [];
+  const firstOpen = list.find((item) => !item.off);
+
+  setForm((current) => ({
+    ...current,
+    date: firstOpen ? firstOpen.value : current.date,
+  }));
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [form.doctorId, isHospital]);
 
   useEffect(() => {
     let alive = true;
@@ -5770,12 +5801,13 @@ function BookingPage({ clinicId, go, notify }) {
                 </div>
               </div>
               <div>
-                {notices.map((n) => (
+                {boardNotices.map((n) => (
                   <div className="notice-item" key={n.id}>
                     <span className="pin">📌</span>
                     <div>
                       <p>{n.message}</p>
                       <span className="notice-meta">
+                        {n.by ? n.by + " · " : ""}
                         {n.always
                           ? "🔁 Always shown"
                           : "🗓️ Shown until " + fmtLongDate(n.until)}
@@ -5851,8 +5883,9 @@ function BookingPage({ clinicId, go, notify }) {
                 <PatientFields
                   form={form}
                   set={set}
-                  dates={dates}
-                  doctors={clinic && clinic.doctors ? clinic.doctors : []}
+                  dates={isHospital ? selectedDoctor ? selectedDoctor.dates || [] : [] : dates}
+                  doctors={isHospital ? clinic.doctors || [] : []}
+                  showDoctorPicker={isHospital}
                 />
               </div>
 
@@ -7076,9 +7109,11 @@ function QueueTrackPage({ clinicId, go }) {
 
   /* A tracked booking wins over a browsed clinic board, and it also pins the
      board to that booking's date so an old token is never compared against
-     today's queue. */
+     today's queue. For a hospital booking it also pins the doctor, so the
+     board tracks that doctor's own queue instead of the whole hospital's. */
   const tClinic = picked ? picked.clinicId : boardId;
   const tDate = picked ? picked.date : "";
+  const tDoctor = picked ? picked.doctorId || "" : "";
 
   useEffect(() => {
     api("/clinics").then((data) => {
@@ -7114,9 +7149,15 @@ function QueueTrackPage({ clinicId, go }) {
       const seq = reqRef.current + 1;
       reqRef.current = seq;
       if (!silent) setBoardBusy(true);
-      const query = tDate ? "?date=" + encodeURIComponent(tDate) : "";
+      const params = new URLSearchParams();
+      if (tDate) params.set("date", tDate);
+      if (tDoctor) params.set("doctorId", tDoctor);
+      const query = params.toString();
       const data = await api(
-        "/clinics/" + encodeURIComponent(tClinic) + "/live" + query,
+        "/clinics/" +
+          encodeURIComponent(tClinic) +
+          "/live" +
+          (query ? "?" + query : ""),
       );
       if (seq !== reqRef.current) return undefined;
       if (!silent) setBoardBusy(false);
@@ -7129,7 +7170,7 @@ function QueueTrackPage({ clinicId, go }) {
       applyLive(data.live, data.clinic);
       return undefined;
     },
-    [tClinic, tDate, applyLive],
+    [tClinic, tDate, tDoctor, applyLive],
   );
 
   /* Only a genuine clinic switch blanks the board. Picking one of your own
@@ -7147,18 +7188,27 @@ function QueueTrackPage({ clinicId, go }) {
 
   /* REALTIME. The clinic pushes a new board the instant a token is called, so
      the patient's screen moves without waiting for any timer. The pushed
-     payload is already exactly the public board shape, so it is applied
-     DIRECTLY - no refetch round trip, no flicker. */
+     payload is the whole clinic's aggregate board (never scoped to one
+     doctor), so it is applied DIRECTLY only when tracking a solo clinic or
+     browsing a clinic-wide board. When a specific hospital doctor is being
+     tracked, the push is just a "something changed" signal - it triggers a
+     silent, correctly doctor-scoped refetch instead of painting the
+     aggregate numbers over that doctor's own board. */
   const onPush = useCallback(
     (payload) => {
-      if (!payload || !payload.live) return;
+      if (!payload) return;
       /* Ignore anything addressed to another clinic or another day, so a
          cross-room push can never repaint a pinned board. */
       if (payload.clinicId && payload.clinicId !== tClinic) return;
       if (tDate && payload.date && payload.date !== tDate) return;
+      if (tDoctor) {
+        loadBoard(true);
+        return;
+      }
+      if (!payload.live) return;
       applyLive(payload.live);
     },
-    [applyLive, tClinic, tDate],
+    [applyLive, loadBoard, tClinic, tDate, tDoctor],
   );
 
   const socketLive = useQueueSocket(tClinic, tDate, onPush);
@@ -8667,6 +8717,52 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                 </div>
               </div>
 
+              {analytics && analytics.doctors && analytics.doctors.length ? (
+                <div className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>By doctor</h3>
+                      <p className="small muted">
+                        Same range as above, split out per doctor - {rangeLabel}.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="panel-body">
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                        gap: 14,
+                      }}
+                    >
+                      {analytics.doctors.map((doc) => (
+                        <div className="panel" key={doc.doctorId} style={{ padding: 16 }}>
+                          <div className="row" style={{ justifyContent: "space-between" }}>
+                            <div>
+                              <b>{doc.name}</b>
+                              <div className="small muted">{doc.specialization}</div>
+                            </div>
+                            {!doc.active ? (
+                              <span className="badge badge-soft">Inactive</span>
+                            ) : null}
+                          </div>
+                          <dl className="kv" style={{ marginTop: 12 }}>
+                            <dt>Total</dt>
+                            <dd>{doc.total}</dd>
+                            <dt>Visited</dt>
+                            <dd>{doc.visited}</dd>
+                            <dt>Remaining</dt>
+                            <dd>{doc.remaining}</dd>
+                            <dt>Cancelled</dt>
+                            <dd>{doc.cancelled}</dd>
+                          </dl>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="panel">
                 <div className="panel-head">
                   <div>
@@ -9083,6 +9179,9 @@ function LiveQueueTab({
   const [auto, setAuto] = useState(true);
   const [names, setNames] = useState(true);
   const [beat, setBeat] = useState(0);
+  // Set only for a hospital-admin login: an array of per-doctor summaries
+  // instead of a single tokens/live pair. null means "not that case".
+  const [doctors, setDoctors] = useState(null);
 
   /* Marking a token fires BOTH a direct refetch and a Socket.IO broadcast, so
      two responses can land out of order and flip a pebble back to its previous
@@ -9106,6 +9205,13 @@ function LiveQueueTab({
         setError(data.message);
         return undefined;
       }
+      if (Array.isArray(data.doctors)) {
+        setDoctors(data.doctors);
+        setError("");
+        setBeat(Date.now());
+        return undefined;
+      }
+      setDoctors(null);
       const stamp =
         data.live && data.live.serverTime ? String(data.live.serverTime) : "";
       if (stamp && stampRef.current && stamp < stampRef.current)
@@ -9217,6 +9323,96 @@ function LiveQueueTab({
     if (row.status === "visited") return who + " - visited, tap to revert";
     return who + " - " + row.quota + " quota, tap to mark visited";
   };
+
+  if (doctors) {
+    return (
+      <div className="lq">
+        <div className="panel">
+          <div className="panel-head">
+            <div>
+              <h3>Live queue status - by doctor</h3>
+              <p className="small muted">
+                Each doctor runs their own independent queue. Open that
+                doctor's own login for the interactive board and to mark
+                patients visited.
+              </p>
+            </div>
+            <div className="adm-top-actions">
+              <div className="date-pick">
+                <Icon name="calendar" size={15} />
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value || todayISO())}
+                />
+              </div>
+              <button className="btn btn-soft btn-sm" onClick={() => load(false)}>
+                <Icon name="refresh" size={15} /> Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="panel-body">
+            {error ? <Alert kind="err">{error}</Alert> : null}
+
+            {loading && !doctors.length ? (
+              <Loading label="Loading each doctor's queue" />
+            ) : !doctors.length ? (
+              <div className="empty">
+                <div className="empty-ico">
+                  <Icon name="users" size={26} />
+                </div>
+                <h4>No doctors yet</h4>
+                <p className="muted small">
+                  Add doctors from the Doctors tab to see their queues here.
+                </p>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                {doctors.map((doc) => {
+                  const dLive = doc.live || {};
+                  return (
+                    <div className="panel" key={doc.doctorId} style={{ padding: 16 }}>
+                      <div className="row" style={{ justifyContent: "space-between" }}>
+                        <div>
+                          <b>{doc.name}</b>
+                          <div className="small muted">{doc.specialization}</div>
+                        </div>
+                        {!doc.active ? (
+                          <span className="badge badge-soft">Inactive</span>
+                        ) : null}
+                      </div>
+                      <div className="lq-pills" style={{ marginTop: 12 }}>
+                        <span className="lq-pill">
+                          Now serving <b>{dLive.currentToken || "--"}</b>
+                        </span>
+                        <span className="lq-pill">
+                          Up next{" "}
+                          <b>{dLive.nextToken ? "#" + dLive.nextToken : "--"}</b>
+                        </span>
+                        <span className="lq-pill">
+                          Waiting <b>{dLive.waiting || 0}</b>
+                        </span>
+                        <span className="lq-pill">
+                          Seen <b>{dLive.visited || 0}</b>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="lq">
@@ -9627,6 +9823,7 @@ function WalkInModal({ close, notify, onAdded, onExpired, clinic }) {
           form={form}
           set={set}
           walkIn
+          showDoctorPicker={Boolean(clinic && clinic.type === "hospital" && !clinic.doctor)}
           doctors={
             // A doctor adding their own walk-in doesn't need to pick anyone.
             clinic && clinic.type === "hospital" && !clinic.doctor
