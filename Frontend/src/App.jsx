@@ -5526,6 +5526,11 @@ function BookingPage({ clinicId, go, notify }) {
   const [dates, setDates] = useState([]);
   const [notices, setNotices] = useState([]);
 
+  const [fatal, setFatal] = useState("");
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [otp, setOtp] = useState("");
+
   const isHospital = Boolean(clinic && clinic.type === "hospital");
   const selectedDoctor = isHospital
     ? (clinic.doctors || []).find((d) => d.id === form.doctorId)
@@ -5533,10 +5538,6 @@ function BookingPage({ clinicId, go, notify }) {
   const boardNotices = isHospital
     ? notices.concat(selectedDoctor ? selectedDoctor.notices || [] : [])
     : notices;
-  const [fatal, setFatal] = useState("");
-  const [step, setStep] = useState(1);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [otp, setOtp] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
