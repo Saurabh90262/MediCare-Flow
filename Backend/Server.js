@@ -211,7 +211,16 @@ const clinicSchema = new mongoose.Schema(
             trim: true,
             lowercase: true,
           },
+          // The doctor's OWN contact details - kept separate from the
+          // hospital's clinicName/address/phone/adminEmail, which only the
+          // hospital's own admin login may ever edit.
+          email: { type: String, default: "", trim: true, lowercase: true },
+          mobile: { type: String, default: "", trim: true },
           passwordHash: { type: String, required: true },
+          // Lets a doctor reset their OWN password via their OWN email OTP,
+          // completely separate from the hospital admin's resetCodeHash below.
+          resetCodeHash: { type: String, default: "" },
+          resetExpires: { type: Date, default: null },
           createdAt: { type: Date, default: Date.now },
           // This doctor's own closures/notices - completely separate from
           // the hospital-wide ones below. A hospital-wide closure/notice
@@ -763,6 +772,9 @@ function sessionDoctor(clinic, doctorId) {
     name: found.name,
     specialization: found.specialization,
     photo: found.photo || "",
+    email: found.email || "",
+    mobile: found.mobile || "",
+    adminUserId: found.adminUserId,
   };
 }
 
@@ -1986,6 +1998,30 @@ function identifierQuery(raw) {
   };
 }
 
+// Resolves an admin user ID or email to whichever account it belongs to -
+// a clinic/solo-admin account, OR a doctor nested inside a hospital's own
+// roster. Returns { clinic, doctor } (doctor is null for a clinic account),
+// or null if nothing matches. This is what lets a doctor use "forgot
+// password" with their OWN registered email/login ID, fully independent of
+// the hospital admin's own account.
+async function findAuthAccount(raw) {
+  const value = str(raw).trim().toLowerCase();
+  if (!value) return null;
+
+  const clinic = await Clinic.findOne(identifierQuery(value));
+  if (clinic) return { clinic, doctor: null };
+
+  const hospital = await Clinic.findOne({
+    type: "hospital",
+    $or: [{ "doctors.adminUserId": value }, { "doctors.email": value }],
+  });
+  if (!hospital) return null;
+  const doctor = (hospital.doctors || []).find(
+    (d) => d.adminUserId === value || str(d.email).toLowerCase() === value,
+  );
+  return doctor ? { clinic: hospital, doctor } : null;
+}
+
 function registerOtpEmail(pending, code) {
   const pseudoClinic = {
     clinicName: str(pending.clinicName) || BRAND,
@@ -2397,10 +2433,8 @@ app.post(
   "/api/auth/forgot-password",
   ah(async (req, res) => {
     const body = req.body || {};
-    const query = identifierQuery(
-      body.identifier || body.adminUserId || body.adminEmail,
-    );
-    if (!query) {
+    const identifier = body.identifier || body.adminUserId || body.adminEmail;
+    if (!str(identifier).trim()) {
       return res.status(400).json({
         success: false,
         message:
@@ -2408,30 +2442,38 @@ app.post(
       });
     }
 
-    const clinic = await Clinic.findOne(query);
-    if (!clinic) {
+    // Matches EITHER a clinic/solo-admin account OR a doctor's own login
+    // nested in a hospital's roster - a doctor resets their OWN password
+    // with their OWN registered email, independent of the hospital admin.
+    const account = await findAuthAccount(identifier);
+    if (!account) {
       return res.status(404).json({
         success: false,
         message:
-          "No clinic admin account matches that user ID or email. Check the spelling, or register your clinic first.",
+          "No admin account matches that user ID or email. Check the spelling, or register your clinic first.",
       });
     }
-    if (!clinic.adminEmail) {
+    const { clinic, doctor } = account;
+    const target = doctor || clinic;
+    const targetEmail = doctor ? doctor.email : clinic.adminEmail;
+    const targetLabel = doctor ? doctor.name : clinic.clinicName;
+
+    if (!targetEmail) {
       return res.status(400).json({
         success: false,
         message:
-          "This clinic has no admin email on file, so a reset code cannot be emailed.",
+          "This account has no email on file, so a reset code cannot be emailed.",
       });
     }
 
     const code = sixDigits();
-    clinic.resetCodeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
-    clinic.resetExpires = new Date(Date.now() + RESET_TTL_MS);
+    target.resetCodeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
+    target.resetExpires = new Date(Date.now() + RESET_TTL_MS);
     await clinic.save();
 
     const sent = await sendEmail({
-      to: clinic.adminEmail,
-      subject: "Password reset code - " + clinic.clinicName,
+      to: targetEmail,
+      subject: "Password reset code - " + targetLabel,
       html: resetEmail(clinic, code),
     });
     if (!sent) {
@@ -2445,18 +2487,18 @@ app.post(
     }
     console.log(
       "[reset] Code emailed to " +
-        clinic.adminEmail +
+        targetEmail +
         " for " +
-        clinic.adminUserId,
+        (doctor ? doctor.adminUserId : clinic.adminUserId),
     );
 
     return res.json({
       success: true,
       message:
         "A 6-digit reset code has been emailed to " +
-        maskEmail(clinic.adminEmail) +
+        maskEmail(targetEmail) +
         ".",
-      sentTo: maskEmail(clinic.adminEmail),
+      sentTo: maskEmail(targetEmail),
       expiresInMinutes: Math.round(RESET_TTL_MS / 60000),
     });
   }),
@@ -2466,13 +2508,11 @@ app.post(
   "/api/auth/reset-password",
   ah(async (req, res) => {
     const body = req.body || {};
-    const query = identifierQuery(
-      body.identifier || body.adminUserId || body.adminEmail,
-    );
+    const identifier = body.identifier || body.adminUserId || body.adminEmail;
     const code = str(body.code);
     const password = str(body.password);
 
-    if (!query || !code || !password) {
+    if (!str(identifier).trim() || !code || !password) {
       return res.status(400).json({
         success: false,
         message:
@@ -2485,13 +2525,14 @@ app.post(
         message: "New password must be at least 6 characters.",
       });
 
-    const clinic = await Clinic.findOne(query);
+    const account = await findAuthAccount(identifier);
+    const target = account && (account.doctor || account.clinic);
     const valid =
-      clinic &&
-      clinic.resetCodeHash &&
-      clinic.resetExpires &&
-      clinic.resetExpires.getTime() > Date.now() &&
-      (await bcrypt.compare(code, clinic.resetCodeHash));
+      target &&
+      target.resetCodeHash &&
+      target.resetExpires &&
+      target.resetExpires.getTime() > Date.now() &&
+      (await bcrypt.compare(code, target.resetCodeHash));
 
     if (!valid)
       return res.status(400).json({
@@ -2500,16 +2541,19 @@ app.post(
           "That reset code is invalid or has expired. Request a new one.",
       });
 
-    clinic.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    clinic.resetCodeHash = "";
-    clinic.resetExpires = null;
+    const { clinic, doctor } = account;
+    target.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    target.resetCodeHash = "";
+    target.resetExpires = null;
     await clinic.save();
 
     return res.json({
       success: true,
       message: "Password updated. You can sign in now.",
-      token: signToken(clinic),
-      clinic: adminClinic(clinic),
+      token: signToken(clinic, doctor ? doctor.doctorId : ""),
+      clinic: Object.assign(adminClinic(clinic), {
+        doctor: doctor ? sessionDoctor(clinic, doctor.doctorId) : null,
+      }),
     });
   }),
 );
@@ -3339,6 +3383,87 @@ app.put(
   clinicAuth,
   ah(async (req, res) => {
     const body = req.body || {};
+
+    /* A doctor's own login (req.doctorId set) may only ever edit their OWN
+       profile - name, specialization, photo, email, mobile. It must never be
+       able to change the hospital's shared, public-facing details (name,
+       address, phone, timings, about, admin email...). Only the hospital's
+       own admin login (req.doctorId === "") reaches the branch below this. */
+    if (req.doctorId) {
+      const clinic = await Clinic.findOne({ clinicId: req.clinicId });
+      if (!clinic)
+        return res
+          .status(404)
+          .json({ success: false, message: "Clinic not found." });
+      const doc = (clinic.doctors || []).find(
+        (d) => d.doctorId === req.doctorId,
+      );
+      if (!doc)
+        return res
+          .status(404)
+          .json({ success: false, message: "Doctor not found." });
+
+      if (body.name !== undefined) {
+        const name = str(body.name);
+        if (!name || name.length < 2)
+          return res
+            .status(400)
+            .json({ success: false, message: "Please enter your name." });
+        doc.name = name;
+      }
+      if (body.specialization !== undefined) {
+        const specialization = str(body.specialization);
+        if (!specialization)
+          return res.status(400).json({
+            success: false,
+            message: "Please enter a specialization.",
+          });
+        doc.specialization = specialization;
+      }
+      if (body.photo !== undefined) doc.photo = str(body.photo);
+      if (body.mobile !== undefined) {
+        const mobile = str(body.mobile);
+        if (mobile && !/^\d{10}$/.test(mobile))
+          return res.status(400).json({
+            success: false,
+            message: "Mobile number must be exactly 10 digits.",
+          });
+        doc.mobile = mobile;
+      }
+      if (body.email !== undefined) {
+        const email = str(body.email).toLowerCase();
+        if (!email || !EMAIL_RE.test(email))
+          return res.status(400).json({
+            success: false,
+            message: "Please enter a valid email address.",
+          });
+        if (
+          email !== doc.email &&
+          ((await Clinic.exists({ adminEmail: email })) ||
+            (await Clinic.exists({
+              "doctors.email": email,
+              "doctors.doctorId": { $ne: req.doctorId },
+            })))
+        )
+          return res.status(409).json({
+            success: false,
+            message: "That email is already registered to another account.",
+          });
+        doc.email = email;
+      }
+
+      await clinic.save();
+      return res.json({
+        success: true,
+        message: "Your profile has been updated.",
+        clinic: Object.assign(adminClinic(clinic), {
+          doctor: sessionDoctor(clinic, req.doctorId),
+        }),
+      });
+    }
+
+    // Hospital's own admin login (or a solo clinic) - the shared,
+    // public-facing clinic-level details. A doctor session never reaches here.
     const updates = {};
     const editable = [
       "clinicName",
@@ -3695,6 +3820,8 @@ function publicDoctor(d) {
     photo: d.photo || "",
     active: d.active !== false,
     adminUserId: d.adminUserId,
+    email: d.email || "",
+    mobile: d.mobile || "",
     createdAt: d.createdAt,
   };
 }
@@ -3729,6 +3856,8 @@ app.post(
     const body = req.body || {};
     const name = str(body.name);
     const specialization = str(body.specialization);
+    const email = str(body.email).toLowerCase();
+    const mobile = str(body.mobile);
     const adminUserId = str(body.adminUserId).toLowerCase();
     const password = str(body.password);
     const photo = str(body.photo);
@@ -3741,6 +3870,16 @@ app.post(
       return res
         .status(400)
         .json({ success: false, message: "Please enter a specialization." });
+    if (!EMAIL_RE.test(email))
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address for the doctor.",
+      });
+    if (!/^\d{10}$/.test(mobile))
+      return res.status(400).json({
+        success: false,
+        message: "Doctor mobile number must be exactly 10 digits.",
+      });
     if (!/^[a-zA-Z0-9_.]{4,24}$/.test(adminUserId))
       return res.status(400).json({
         success: false,
@@ -3775,6 +3914,19 @@ app.post(
         .status(409)
         .json({ success: false, message: "That login ID is already taken." });
 
+    // email must also be globally unique - it is how "forgot password"
+    // finds the right account for OTP verification.
+    if (await Clinic.exists({ adminEmail: email }))
+      return res.status(409).json({
+        success: false,
+        message: "That email is already registered to another account.",
+      });
+    if (await Clinic.exists({ "doctors.email": email }))
+      return res.status(409).json({
+        success: false,
+        message: "That email is already registered to another account.",
+      });
+
     let doctorId = slugify(name) || "doctor";
     if ((clinic.doctors || []).some((d) => d.doctorId === doctorId))
       doctorId = doctorId + "-" + crypto.randomBytes(2).toString("hex");
@@ -3786,6 +3938,8 @@ app.post(
       photo,
       active: true,
       adminUserId,
+      email,
+      mobile,
       passwordHash: await bcrypt.hash(password, BCRYPT_ROUNDS),
     });
     await clinic.save();
@@ -3834,6 +3988,36 @@ app.put(
           message: "Please enter a specialization.",
         });
       doc.specialization = specialization;
+    }
+    if (body.email !== undefined) {
+      const email = str(body.email).toLowerCase();
+      if (!EMAIL_RE.test(email))
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid email address.",
+        });
+      if (
+        email !== doc.email &&
+        ((await Clinic.exists({ adminEmail: email })) ||
+          (await Clinic.exists({
+            "doctors.email": email,
+            "doctors.doctorId": { $ne: doctorId },
+          })))
+      )
+        return res.status(409).json({
+          success: false,
+          message: "That email is already registered to another account.",
+        });
+      doc.email = email;
+    }
+    if (body.mobile !== undefined) {
+      const mobile = str(body.mobile);
+      if (mobile && !/^\d{10}$/.test(mobile))
+        return res.status(400).json({
+          success: false,
+          message: "Mobile number must be exactly 10 digits.",
+        });
+      doc.mobile = mobile;
     }
     if (body.photo !== undefined) doc.photo = str(body.photo);
     if (body.active !== undefined) doc.active = Boolean(body.active);
@@ -3895,14 +4079,26 @@ app.put(
       return res
         .status(404)
         .json({ success: false, message: "Clinic not found." });
-    if (!(await bcrypt.compare(currentPassword, clinic.passwordHash))) {
+
+    // A doctor's own login changes only their own subdocument's password;
+    // the hospital's own admin login (req.doctorId === "") changes the
+    // clinic's password, exactly as before.
+    const target = req.doctorId
+      ? (clinic.doctors || []).find((d) => d.doctorId === req.doctorId)
+      : clinic;
+    if (req.doctorId && !target)
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
+
+    if (!(await bcrypt.compare(currentPassword, target.passwordHash))) {
       return res.status(401).json({
         success: false,
         message: "Your current password is incorrect.",
       });
     }
 
-    clinic.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    target.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await clinic.save();
     return res.json({
       success: true,

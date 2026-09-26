@@ -10243,19 +10243,34 @@ function QrShareCard({ clinic, link, notify }) {
 }
 
 function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
-  const [profile, setProfile] = useState({
-    clinicName: clinic.clinicName || "",
-    doctorName: clinic.doctorName || "",
-    specialization: clinic.specialization || "",
-    address: clinic.address || "",
-    city: clinic.city || "",
-    phone: clinic.phone || "",
-    photo: clinic.photo || "",
-    photoKey: clinic.photoKey || "",
-    timings: clinic.timings || "",
-    about: clinic.about || "",
-    adminEmail: clinic.adminEmail || "",
-  });
+  // A doctor's own login (clinic.doctor set) only ever edits their OWN
+  // profile - never the hospital's shared, public-facing details. Only the
+  // hospital's own admin login (or a solo clinic) reaches the else branch.
+  const isDoctor = Boolean(clinic.doctor);
+
+  const [profile, setProfile] = useState(
+    isDoctor
+      ? {
+          name: clinic.doctor.name || "",
+          specialization: clinic.doctor.specialization || "",
+          photo: clinic.doctor.photo || "",
+          email: clinic.doctor.email || "",
+          mobile: clinic.doctor.mobile || "",
+        }
+      : {
+          clinicName: clinic.clinicName || "",
+          doctorName: clinic.doctorName || "",
+          specialization: clinic.specialization || "",
+          address: clinic.address || "",
+          city: clinic.city || "",
+          phone: clinic.phone || "",
+          photo: clinic.photo || "",
+          photoKey: clinic.photoKey || "",
+          timings: clinic.timings || "",
+          about: clinic.about || "",
+          adminEmail: clinic.adminEmail || "",
+        },
+  );
   const [pw, setPw] = useState({
     currentPassword: "",
     newPassword: "",
@@ -10323,33 +10338,26 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
 
   return (
     <div className="set-grid">
-      <form className="panel" onSubmit={saveProfile} noValidate>
-        <div className="panel-head">
-          <div>
-            <h3>Clinic profile</h3>
-            <p className="small muted">
-              This is what patients see in the public directory.
-            </p>
+      {isDoctor ? (
+        <form className="panel" onSubmit={saveProfile} noValidate>
+          <div className="panel-head">
+            <div>
+              <h3>Your profile</h3>
+              <p className="small muted">
+                Only you can see and change these details. The hospital's own
+                name, address, phone and other shared details are managed by
+                the hospital's admin login, not yours.
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="panel-body form-grid">
-          <div className="field">
-            <label>Clinic name</label>
-            <input
-              className="input"
-              required
-              value={profile.clinicName}
-              onChange={(e) => set("clinicName", e.target.value)}
-            />
-          </div>
-          <div className="grid2">
+          <div className="panel-body form-grid">
             <div className="field">
-              <label>Doctor name</label>
+              <label>Your name</label>
               <input
                 className="input"
                 required
-                value={profile.doctorName}
-                onChange={(e) => set("doctorName", e.target.value)}
+                value={profile.name}
+                onChange={(e) => set("name", e.target.value)}
               />
             </div>
             <div className="field">
@@ -10366,97 +10374,216 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
                 ))}
               </select>
             </div>
-          </div>
-          <div className="field">
-            <label>Address</label>
-            <textarea
-              className="textarea"
-              rows="2"
-              required
-              value={profile.address}
-              onChange={(e) => set("address", e.target.value)}
-            />
-          </div>
-          <div className="grid2">
-            <div className="field">
-              <label>City</label>
-              <input
-                className="input"
-                value={profile.city}
-                onChange={(e) => set("city", e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label>Phone</label>
-              <input
-                className="input"
-                value={profile.phone}
-                onChange={(e) =>
-                  set("phone", e.target.value.replace(/\D/g, "").slice(0, 10))
-                }
-              />
-            </div>
-          </div>
-          <div className="grid2">
-            <div className="field">
-              <label>Opening hours</label>
-              <input
-                className="input"
-                value={profile.timings}
-                onChange={(e) => set("timings", e.target.value)}
-                placeholder="Mon-Sat, 9 AM - 6 PM"
-              />
+            <div className="grid2">
+              <div className="field">
+                <label>Email (used for password reset)</label>
+                <input
+                  className="input"
+                  type="email"
+                  required
+                  value={profile.email}
+                  onChange={(e) => set("email", e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Mobile number</label>
+                <input
+                  className="input"
+                  value={profile.mobile}
+                  onChange={(e) =>
+                    set(
+                      "mobile",
+                      e.target.value.replace(/\D/g, "").slice(0, 10),
+                    )
+                  }
+                />
+              </div>
             </div>
             <div className="field">
               <ImagePicker
                 value={profile.photo}
-                onChange={(url, key) => {
-                  set("photo", url);
-                  set("photoKey", key);
-                }}
+                onChange={(url) => set("photo", url)}
               />
             </div>
-          </div>
-          <div className="field">
-            <label>About the clinic</label>
-            <textarea
-              className="textarea"
-              rows="3"
-              value={profile.about}
-              onChange={(e) => set("about", e.target.value)}
-              placeholder="Services, facilities, anything patients should know"
-            />
-          </div>
-          <div className="field">
-            <label>Admin email (password resets)</label>
-            <input
-              className="input"
-              type="email"
-              value={profile.adminEmail}
-              onChange={(e) => set("adminEmail", e.target.value)}
-            />
-          </div>
 
-          {error ? <Alert kind="err">{error}</Alert> : null}
+            {error ? <Alert kind="err">{error}</Alert> : null}
 
-          <button
-            className="btn btn-primary btn-block"
-            disabled={busy === "profile"}
-          >
-            {busy === "profile" ? (
-              <>
-                <Spinner /> Saving...
-              </>
-            ) : (
-              <>
-                <Icon name="check" size={16} /> Save clinic profile
-              </>
-            )}
-          </button>
-        </div>
-      </form>
+            <button
+              className="btn btn-primary btn-block"
+              disabled={busy === "profile"}
+            >
+              {busy === "profile" ? (
+                <>
+                  <Spinner /> Saving...
+                </>
+              ) : (
+                <>
+                  <Icon name="check" size={16} /> Save my profile
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form className="panel" onSubmit={saveProfile} noValidate>
+          <div className="panel-head">
+            <div>
+              <h3>Clinic profile</h3>
+              <p className="small muted">
+                This is what patients see in the public directory.
+              </p>
+            </div>
+          </div>
+          <div className="panel-body form-grid">
+            <div className="field">
+              <label>Clinic name</label>
+              <input
+                className="input"
+                required
+                value={profile.clinicName}
+                onChange={(e) => set("clinicName", e.target.value)}
+              />
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>Doctor name</label>
+                <input
+                  className="input"
+                  required
+                  value={profile.doctorName}
+                  onChange={(e) => set("doctorName", e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Specialization</label>
+                <select
+                  className="select"
+                  value={profile.specialization}
+                  onChange={(e) => set("specialization", e.target.value)}
+                >
+                  {SPECIALIZATIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="field">
+              <label>Address</label>
+              <textarea
+                className="textarea"
+                rows="2"
+                required
+                value={profile.address}
+                onChange={(e) => set("address", e.target.value)}
+              />
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>City</label>
+                <input
+                  className="input"
+                  value={profile.city}
+                  onChange={(e) => set("city", e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Phone</label>
+                <input
+                  className="input"
+                  value={profile.phone}
+                  onChange={(e) =>
+                    set(
+                      "phone",
+                      e.target.value.replace(/\D/g, "").slice(0, 10),
+                    )
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>Opening hours</label>
+                <input
+                  className="input"
+                  value={profile.timings}
+                  onChange={(e) => set("timings", e.target.value)}
+                  placeholder="Mon-Sat, 9 AM - 6 PM"
+                />
+              </div>
+              <div className="field">
+                <ImagePicker
+                  value={profile.photo}
+                  onChange={(url, key) => {
+                    set("photo", url);
+                    set("photoKey", key);
+                  }}
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label>About the clinic</label>
+              <textarea
+                className="textarea"
+                rows="3"
+                value={profile.about}
+                onChange={(e) => set("about", e.target.value)}
+                placeholder="Services, facilities, anything patients should know"
+              />
+            </div>
+            <div className="field">
+              <label>Admin email (password resets)</label>
+              <input
+                className="input"
+                type="email"
+                value={profile.adminEmail}
+                onChange={(e) => set("adminEmail", e.target.value)}
+              />
+            </div>
+
+            {error ? <Alert kind="err">{error}</Alert> : null}
+
+            <button
+              className="btn btn-primary btn-block"
+              disabled={busy === "profile"}
+            >
+              {busy === "profile" ? (
+                <>
+                  <Spinner /> Saving...
+                </>
+              ) : (
+                <>
+                  <Icon name="check" size={16} /> Save clinic profile
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="stack">
+        {isDoctor ? (
+          <div className="panel">
+            <div className="panel-head">
+              <div>
+                <h3>Your account</h3>
+                <p className="small muted">
+                  Managed by you. The hospital admin handles the shared
+                  hospital listing.
+                </p>
+              </div>
+            </div>
+            <div className="panel-body stack">
+              <dl className="kv">
+                <dt>Hospital</dt>
+                <dd>{clinic.clinicName}</dd>
+                <dt>Your login ID</dt>
+                <dd className="mono">{clinic.doctor.adminUserId}</dd>
+              </dl>
+            </div>
+          </div>
+        ) : (
         <div className="panel">
           <div className="panel-head">
             <div>
@@ -10506,8 +10633,11 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
             </dl>
           </div>
         </div>
+        )}
 
-        <QrShareCard clinic={clinic} link={bookingLink} notify={notify} />
+        {!isDoctor ? (
+          <QrShareCard clinic={clinic} link={bookingLink} notify={notify} />
+        ) : null}
 
         <form className="panel" onSubmit={savePassword} noValidate>
           <div className="panel-head">
@@ -11022,13 +11152,20 @@ function DoctorsTab({ notify, onExpired }) {
   const [form, setForm] = useState({
     name: "",
     specialization: "General Physician",
+    email: "",
+    mobile: "",
     adminUserId: "",
     password: "",
   });
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const [editingId, setEditingId] = useState("");
-  const [editForm, setEditForm] = useState({ name: "", specialization: "" });
+  const [editForm, setEditForm] = useState({
+    name: "",
+    specialization: "",
+    email: "",
+    mobile: "",
+  });
   const [editBusy, setEditBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -11072,6 +11209,8 @@ function DoctorsTab({ notify, onExpired }) {
     setForm({
       name: "",
       specialization: "General Physician",
+      email: "",
+      mobile: "",
       adminUserId: "",
       password: "",
     });
@@ -11150,7 +11289,9 @@ function DoctorsTab({ notify, onExpired }) {
             <h3>Your doctors</h3>
             <p className="small muted">
               Each doctor gets their own login and only ever sees their own
-              patients. Patients pick a doctor from this list when booking.
+              patients. Patients pick a doctor from this list when booking. A
+              doctor's login can only edit their own profile and password -
+              never the hospital's own details.
             </p>
           </div>
         </div>
@@ -11191,6 +11332,32 @@ function DoctorsTab({ notify, onExpired }) {
                           </option>
                         ))}
                       </select>
+                    </div>
+                  </div>
+                  <div className="grid2">
+                    <div className="field">
+                      <label>Email</label>
+                      <input
+                        className="input"
+                        type="email"
+                        value={editForm.email}
+                        onChange={(e) =>
+                          setEditForm((c) => ({ ...c, email: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Mobile number</label>
+                      <input
+                        className="input"
+                        value={editForm.mobile}
+                        onChange={(e) =>
+                          setEditForm((c) => ({
+                            ...c,
+                            mobile: e.target.value.replace(/\D/g, "").slice(0, 10),
+                          }))
+                        }
+                      />
                     </div>
                   </div>
                   <div className="row">
@@ -11237,6 +11404,12 @@ function DoctorsTab({ notify, onExpired }) {
                     <div className="small muted">
                       Login ID: {doc.adminUserId}
                     </div>
+                    {doc.email ? (
+                      <div className="small muted">Email: {doc.email}</div>
+                    ) : null}
+                    {doc.mobile ? (
+                      <div className="small muted">Mobile: {doc.mobile}</div>
+                    ) : null}
                   </div>
                   <div className="row">
                     <button
@@ -11246,6 +11419,8 @@ function DoctorsTab({ notify, onExpired }) {
                         setEditForm({
                           name: doc.name,
                           specialization: doc.specialization,
+                          email: doc.email || "",
+                          mobile: doc.mobile || "",
                         });
                       }}
                     >
@@ -11303,6 +11478,45 @@ function DoctorsTab({ notify, onExpired }) {
                     </option>
                   ))}
                 </select>
+              </div>
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>
+                  Doctor email <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  type="email"
+                  required
+                  value={form.email}
+                  onChange={(e) =>
+                    setForm((c) => ({ ...c, email: e.target.value }))
+                  }
+                  placeholder="doctor@example.com"
+                  autoComplete="off"
+                />
+                <span className="hint">
+                  Used for the doctor's own password reset OTP.
+                </span>
+              </div>
+              <div className="field">
+                <label>
+                  Mobile number <span className="req">*</span>
+                </label>
+                <input
+                  className="input"
+                  required
+                  value={form.mobile}
+                  onChange={(e) =>
+                    setForm((c) => ({
+                      ...c,
+                      mobile: e.target.value.replace(/\D/g, "").slice(0, 10),
+                    }))
+                  }
+                  placeholder="10-digit mobile number"
+                  inputMode="numeric"
+                />
               </div>
             </div>
             <div className="grid2">
