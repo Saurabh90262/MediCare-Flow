@@ -216,6 +216,7 @@ const clinicSchema = new mongoose.Schema(
           // hospital's own admin login may ever edit.
           email: { type: String, default: "", trim: true, lowercase: true },
           mobile: { type: String, default: "", trim: true },
+          photoKey: { type: String, default: "" },
           passwordHash: { type: String, required: true },
           // Lets a doctor reset their OWN password via their OWN email OTP,
           // completely separate from the hospital admin's resetCodeHash below.
@@ -1173,7 +1174,11 @@ async function getNextBookingNumber(clinicId, date, doctorId) {
 
 async function createAppointment(clinicId, form, source, doctor, attempt = 1) {
   const data = normalizeForm(form, source, doctor);
-  const bookingNumber = await getNextBookingNumber(clinicId, data.date, data.doctorId);
+  const bookingNumber = await getNextBookingNumber(
+    clinicId,
+    data.date,
+    data.doctorId,
+  );
   try {
     return await Appointment.create(
       Object.assign(
@@ -1625,7 +1630,6 @@ const DEFAULT_CONSULT_MINUTES = 8;
 // visit rather than the highest token, so reverting a token or seeing an
 // emergency case out of order still reports the correct current patient.
 async function liveQueue(clinicId, date, doctorId) {
-
   const scope = {
     clinicId,
     date,
@@ -1827,34 +1831,23 @@ app.get(
   "/api/clinics/:clinicId",
   ah(async (req, res) => {
     const clinic = await Clinic.findOne(
-      Object.assign(
-        { clinicId: str(req.params.clinicId) },
-        bookableFilter(),
-      ),
+      Object.assign({ clinicId: str(req.params.clinicId) }, bookableFilter()),
     ).lean();
 
     if (!clinic)
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "This clinic could not be found.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "This clinic could not be found.",
+      });
 
     return res.json({
       success: true,
       clinic: publicClinic(clinic),
       today: todayStr(),
 
-      dates:
-        clinic.type === "hospital"
-          ? []
-          : availableDatesFor(clinic, null),
+      dates: clinic.type === "hospital" ? [] : availableDatesFor(clinic, null),
 
-      notices: activeNoticesFrom(
-        clinic.notices,
-        clinic.clinicName
-      ),
+      notices: activeNoticesFrom(clinic.notices, clinic.clinicName),
     });
   }),
 );
@@ -2318,12 +2311,10 @@ app.post(
     const clinic = await Clinic.findOne({ adminUserId });
     if (clinic && (await bcrypt.compare(password, clinic.passwordHash))) {
       if (!clinic.active)
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message: "This clinic account is disabled.",
-          });
+        return res.status(403).json({
+          success: false,
+          message: "This clinic account is disabled.",
+        });
       return res.json({
         success: true,
         message: "Welcome back, " + clinic.clinicName + ".",
@@ -2342,12 +2333,10 @@ app.post(
       (hospital.doctors || []).find((d) => d.adminUserId === adminUserId);
     if (doc && (await bcrypt.compare(password, doc.passwordHash))) {
       if (!hospital.active || doc.active === false)
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message: "This doctor account is disabled.",
-          });
+        return res.status(403).json({
+          success: false,
+          message: "This doctor account is disabled.",
+        });
       return res.json({
         success: true,
         message: "Welcome back, " + doc.name + ".",
@@ -2605,22 +2594,6 @@ app.post(
       });
     }
 
-    const duplicate = await Appointment.findOne({
-      clinicId,
-      date: str(form.date),
-      mobile: str(form.mobile),
-      status: { $ne: "cancelled" },
-    }).lean();
-    if (duplicate) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This mobile number already has appointment #" +
-          duplicate.bookingNumber +
-          " on that date at this clinic.",
-      });
-    }
-
     /* Flag on -> fall back to the two-step OTP flow. */
     if (REQUIRE_BOOKING_OTP) {
       const otp = sixDigits();
@@ -2731,22 +2704,6 @@ app.post(
         success: false,
         message:
           "The clinic is closed on the selected date. Please choose another date.",
-      });
-    }
-
-    const duplicate = await Appointment.findOne({
-      clinicId,
-      date: str(form.date),
-      mobile: str(form.mobile),
-      status: { $ne: "cancelled" },
-    }).lean();
-    if (duplicate) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This mobile number already has appointment #" +
-          duplicate.bookingNumber +
-          " on that date at this clinic.",
       });
     }
 
@@ -2977,9 +2934,7 @@ async function computeAnalytics(clinicId, doctorId, startDate, endDate) {
     Appointment.countDocuments(
       Object.assign({}, base, { status: { $ne: "cancelled" } }),
     ),
-    Appointment.countDocuments(
-      Object.assign({}, base, { status: "visited" }),
-    ),
+    Appointment.countDocuments(Object.assign({}, base, { status: "visited" })),
     Appointment.countDocuments(
       Object.assign({}, base, { status: "cancelled" }),
     ),
@@ -3073,7 +3028,12 @@ app.get(
             name: d.name,
             specialization: d.specialization,
             active: d.active !== false,
-            ...(await computeAnalytics(req.clinicId, d.doctorId, startDate, endDate)),
+            ...(await computeAnalytics(
+              req.clinicId,
+              d.doctorId,
+              startDate,
+              endDate,
+            )),
           })),
         );
       }
@@ -3201,9 +3161,9 @@ async function setStatus(req, res, status) {
   });
 }
 
-  // Pebble grid feed: every token from 1..maxToken for the date, including gaps
-  // (marked "empty") so the dial-pad layout never skips a position.
-  app.get(
+// Pebble grid feed: every token from 1..maxToken for the date, including gaps
+// (marked "empty") so the dial-pad layout never skips a position.
+app.get(
   "/api/admin/queue",
   clinicAuth,
   ah(async (req, res) => {
@@ -3227,7 +3187,12 @@ async function setStatus(req, res, status) {
           live: await liveQueue(req.clinicId, date, d.doctorId),
         })),
       );
-      return res.json({ success: true, date, dateLabel: dateLabel(date), doctors });
+      return res.json({
+        success: true,
+        date,
+        dateLabel: dateLabel(date),
+        doctors,
+      });
     }
 
     // Solo clinic, or one specific doctor's own login: the familiar
@@ -3268,48 +3233,48 @@ async function setStatus(req, res, status) {
   }),
 );
 
-  app.put(
-    "/api/admin/appointments/:id/visited",
-    clinicAuth,
-    ah((req, res) => setStatus(req, res, "visited")),
-  );
-  app.put(
-    "/api/admin/appointments/:id/unvisited",
-    clinicAuth,
-    ah((req, res) => setStatus(req, res, "booked")),
-  );
-  app.put(
-    "/api/admin/appointments/:id/cancel",
-    clinicAuth,
-    ah((req, res) => setStatus(req, res, "cancelled")),
-  );
+app.put(
+  "/api/admin/appointments/:id/visited",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "visited")),
+);
+app.put(
+  "/api/admin/appointments/:id/unvisited",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "booked")),
+);
+app.put(
+  "/api/admin/appointments/:id/cancel",
+  clinicAuth,
+  ah((req, res) => setStatus(req, res, "cancelled")),
+);
 
-  app.get(
-    "/api/admin/appointments/:id",
-    clinicAuth,
-    ah(async (req, res) => {
-      const id = str(req.params.id);
-      if (!mongoose.isValidObjectId(id))
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid appointment id." });
-      const appointment = await Appointment.findOne({
-        _id: id,
-        clinicId: req.clinicId,
-      }).lean();
-      if (!appointment)
-        return res.status(404).json({
-          success: false,
-          message: "Appointment not found for this clinic.",
-        });
-      return res.json({
-        success: true,
-        appointment: Object.assign({}, appointment, {
-          dateLabel: dateLabel(appointment.date),
-        }),
+app.get(
+  "/api/admin/appointments/:id",
+  clinicAuth,
+  ah(async (req, res) => {
+    const id = str(req.params.id);
+    if (!mongoose.isValidObjectId(id))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid appointment id." });
+    const appointment = await Appointment.findOne({
+      _id: id,
+      clinicId: req.clinicId,
+    }).lean();
+    if (!appointment)
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found for this clinic.",
       });
-    }),
-  );
+    return res.json({
+      success: true,
+      appointment: Object.assign({}, appointment, {
+        dateLabel: dateLabel(appointment.date),
+      }),
+    });
+  }),
+);
 
 // Reception walk-in entry: shares the exact same per-clinic-per-day counter as
 // online bookings, so both are interleaved in one queue by arrival order.
@@ -3421,6 +3386,7 @@ app.put(
         doc.specialization = specialization;
       }
       if (body.photo !== undefined) doc.photo = str(body.photo);
+      if (body.photoKey !== undefined) doc.photoKey = str(body.photoKey);
       if (body.mobile !== undefined) {
         const mobile = str(body.mobile);
         if (mobile && !/^\d{10}$/.test(mobile))
@@ -3545,7 +3511,9 @@ app.get(
       ? (clinic.doctors || []).find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !scope)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
 
     return res.json({
       success: true,
@@ -3595,10 +3563,14 @@ app.put(
       ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !target)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
     const tag = req.doctorId ? target.name : clinic.clinicName;
 
-    target.leaveDates = (target.leaveDates || []).filter((l) => l.date !== date);
+    target.leaveDates = (target.leaveDates || []).filter(
+      (l) => l.date !== date,
+    );
     target.notices = (target.notices || []).filter(
       (n) => !(n.auto && n.leaveDate === date),
     );
@@ -3624,7 +3596,9 @@ app.put(
     await clinic.save();
     return res.json({
       success: true,
-      message: off ? "That date is now marked closed." : "That date is open again.",
+      message: off
+        ? "That date is now marked closed."
+        : "That date is open again.",
       dates: availableDatesFor(clinic, req.doctorId ? target : null),
       notices: activeNoticesFrom(target.notices, tag),
     });
@@ -3653,7 +3627,9 @@ app.put(
       ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !target)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
 
     target.weeklyOff = days;
     await clinic.save();
@@ -3695,7 +3671,9 @@ app.post(
       ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !target)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
     const tag = req.doctorId ? target.name : clinic.clinicName;
 
     target.notices.push({ message, until, always, auto: false });
@@ -3733,7 +3711,7 @@ app.put(
           "Choose a date for the notice to show until, or select Always.",
       });
 
-       const clinic = await Clinic.findOne({ clinicId: req.clinicId });
+    const clinic = await Clinic.findOne({ clinicId: req.clinicId });
     if (!clinic)
       return res
         .status(404)
@@ -3743,12 +3721,16 @@ app.put(
       ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !target)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
     const tag = req.doctorId ? target.name : clinic.clinicName;
 
     const notice = (target.notices || []).find((n) => String(n._id) === id);
     if (!notice)
-      return res.status(404).json({ success: false, message: "Notice not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Notice not found." });
 
     notice.message = message;
     notice.always = always;
@@ -3785,7 +3767,9 @@ app.delete(
       ? clinic.doctors.find((d) => d.doctorId === req.doctorId)
       : clinic;
     if (req.doctorId && !target)
-      return res.status(404).json({ success: false, message: "Doctor not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Doctor not found." });
     const tag = req.doctorId ? target.name : clinic.clinicName;
 
     target.notices = (target.notices || []).filter((n) => String(n._id) !== id);

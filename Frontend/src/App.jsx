@@ -186,6 +186,18 @@ async function fitImageFile(file) {
   if (supported && file.size <= MAX_UPLOAD_BYTES) return file;
   if (file.type === "image/gif")
     throw new Error("That GIF is over 900 KB. Please choose a smaller one.");
+  // HEIC/HEIF (the default iPhone camera format) can't be decoded by a
+  // browser's own <img>/canvas pipeline outside Safari, so it fails silently
+  // instead of resizing. Catch it here with a clear message instead of
+  // letting readAsImage() fail in a way that varies by browser.
+  if (
+    /^image\/hei[cf]/i.test(file.type) ||
+    /\.hei[cf]$/i.test(file.name || "")
+  ) {
+    throw new Error(
+      "iPhone HEIC photos can't be uploaded directly from most browsers. Please pick \"Most Compatible\" in your iPhone's camera settings, or convert/export the photo to JPG first.",
+    );
+  }
 
   const img = await readAsImage(file);
   const longest = Math.max(img.width || 1, img.height || 1);
@@ -5238,7 +5250,9 @@ function PatientFields({
             onChange={(e) => set("doctorId", e.target.value)}
           >
             <option value="">
-              {doctors.length ? "Choose a doctor..." : "No doctors available yet"}
+              {doctors.length
+                ? "Choose a doctor..."
+                : "No doctors available yet"}
             </option>
             {doctors.map((doc) => (
               <option key={doc.id} value={doc.id}>
@@ -5371,7 +5385,13 @@ function PatientFields({
               value={form.date}
               onChange={(e) => set("date", e.target.value)}
             >
-              {dates.length ? null : <option value="">Loading dates...</option>}
+              {dates.length ? null : (
+                <option value="">
+                  {showDoctorPicker && !form.doctorId
+                    ? "Select a doctor to see available dates"
+                    : "Loading dates..."}
+                </option>
+              )}
               {dates.map((item) => (
                 <option key={item.value} value={item.value} disabled={item.off}>
                   {item.label}
@@ -5549,18 +5569,18 @@ function BookingPage({ clinicId, go, notify }) {
     setForm((current) => ({ ...current, [key]: value }));
 
   useEffect(() => {
-  if (!isHospital) return;
+    if (!isHospital) return;
 
-  const list = selectedDoctor ? selectedDoctor.dates || [] : [];
-  const firstOpen = list.find((item) => !item.off);
+    const list = selectedDoctor ? selectedDoctor.dates || [] : [];
+    const firstOpen = list.find((item) => !item.off);
 
-  setForm((current) => ({
-    ...current,
-    date: firstOpen ? firstOpen.value : current.date,
-  }));
+    setForm((current) => ({
+      ...current,
+      date: firstOpen ? firstOpen.value : current.date,
+    }));
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [form.doctorId, isHospital]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.doctorId, isHospital]);
 
   useEffect(() => {
     let alive = true;
@@ -5884,7 +5904,13 @@ function BookingPage({ clinicId, go, notify }) {
                 <PatientFields
                   form={form}
                   set={set}
-                  dates={isHospital ? selectedDoctor ? selectedDoctor.dates || [] : [] : dates}
+                  dates={
+                    isHospital
+                      ? selectedDoctor
+                        ? selectedDoctor.dates || []
+                        : []
+                      : dates
+                  }
                   doctors={isHospital ? clinic.doctors || [] : []}
                   showDoctorPicker={isHospital}
                 />
@@ -7919,7 +7945,11 @@ function AdminDashboard({ routeClinicId, go, notify }) {
       ? [["doctors", "Doctors", "users"]]
       : []),
     ["notices", "Notices & leave", "alert"],
-    ["settings", "Clinic settings", "settings"],
+    [
+      "settings",
+      clinic && clinic.doctor ? "My profile" : "Clinic settings",
+      "settings",
+    ],
   ];
 
   const dayLabel = stats ? stats.dateLabel : fmtDate(date);
@@ -8724,7 +8754,8 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                     <div>
                       <h3>By doctor</h3>
                       <p className="small muted">
-                        Same range as above, split out per doctor - {rangeLabel}.
+                        Same range as above, split out per doctor - {rangeLabel}
+                        .
                       </p>
                     </div>
                   </div>
@@ -8732,16 +8763,26 @@ function AdminDashboard({ routeClinicId, go, notify }) {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(220px, 1fr))",
                         gap: 14,
                       }}
                     >
                       {analytics.doctors.map((doc) => (
-                        <div className="panel" key={doc.doctorId} style={{ padding: 16 }}>
-                          <div className="row" style={{ justifyContent: "space-between" }}>
+                        <div
+                          className="panel"
+                          key={doc.doctorId}
+                          style={{ padding: 16 }}
+                        >
+                          <div
+                            className="row"
+                            style={{ justifyContent: "space-between" }}
+                          >
                             <div>
                               <b>{doc.name}</b>
-                              <div className="small muted">{doc.specialization}</div>
+                              <div className="small muted">
+                                {doc.specialization}
+                              </div>
                             </div>
                             {!doc.active ? (
                               <span className="badge badge-soft">Inactive</span>
@@ -9333,9 +9374,9 @@ function LiveQueueTab({
             <div>
               <h3>Live queue status - by doctor</h3>
               <p className="small muted">
-                Each doctor runs their own independent queue. Open that
-                doctor's own login for the interactive board and to mark
-                patients visited.
+                Each doctor runs their own independent queue. Open that doctor's
+                own login for the interactive board and to mark patients
+                visited.
               </p>
             </div>
             <div className="adm-top-actions">
@@ -9344,10 +9385,15 @@ function LiveQueueTab({
                 <input
                   type="date"
                   value={date}
-                  onChange={(event) => setDate(event.target.value || todayISO())}
+                  onChange={(event) =>
+                    setDate(event.target.value || todayISO())
+                  }
                 />
               </div>
-              <button className="btn btn-soft btn-sm" onClick={() => load(false)}>
+              <button
+                className="btn btn-soft btn-sm"
+                onClick={() => load(false)}
+              >
                 <Icon name="refresh" size={15} /> Refresh
               </button>
             </div>
@@ -9379,11 +9425,20 @@ function LiveQueueTab({
                 {doctors.map((doc) => {
                   const dLive = doc.live || {};
                   return (
-                    <div className="panel" key={doc.doctorId} style={{ padding: 16 }}>
-                      <div className="row" style={{ justifyContent: "space-between" }}>
+                    <div
+                      className="panel"
+                      key={doc.doctorId}
+                      style={{ padding: 16 }}
+                    >
+                      <div
+                        className="row"
+                        style={{ justifyContent: "space-between" }}
+                      >
                         <div>
                           <b>{doc.name}</b>
-                          <div className="small muted">{doc.specialization}</div>
+                          <div className="small muted">
+                            {doc.specialization}
+                          </div>
                         </div>
                         {!doc.active ? (
                           <span className="badge badge-soft">Inactive</span>
@@ -9395,7 +9450,9 @@ function LiveQueueTab({
                         </span>
                         <span className="lq-pill">
                           Up next{" "}
-                          <b>{dLive.nextToken ? "#" + dLive.nextToken : "--"}</b>
+                          <b>
+                            {dLive.nextToken ? "#" + dLive.nextToken : "--"}
+                          </b>
                         </span>
                         <span className="lq-pill">
                           Waiting <b>{dLive.waiting || 0}</b>
@@ -9824,7 +9881,9 @@ function WalkInModal({ close, notify, onAdded, onExpired, clinic }) {
           form={form}
           set={set}
           walkIn
-          showDoctorPicker={Boolean(clinic && clinic.type === "hospital" && !clinic.doctor)}
+          showDoctorPicker={Boolean(
+            clinic && clinic.type === "hospital" && !clinic.doctor,
+          )}
           doctors={
             // A doctor adding their own walk-in doesn't need to pick anyone.
             clinic && clinic.type === "hospital" && !clinic.doctor
@@ -10345,8 +10404,8 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
               <h3>Your profile</h3>
               <p className="small muted">
                 Only you can see and change these details. The hospital's own
-                name, address, phone and other shared details are managed by
-                the hospital's admin login, not yours.
+                name, address, phone and other shared details are managed by the
+                hospital's admin login, not yours.
               </p>
             </div>
           </div>
@@ -10402,7 +10461,10 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
             <div className="field">
               <ImagePicker
                 value={profile.photo}
-                onChange={(url) => set("photo", url)}
+                onChange={(url, key) => {
+                  set("photo", url);
+                  set("photoKey", key);
+                }}
               />
             </div>
 
@@ -10494,10 +10556,7 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
                   className="input"
                   value={profile.phone}
                   onChange={(e) =>
-                    set(
-                      "phone",
-                      e.target.value.replace(/\D/g, "").slice(0, 10),
-                    )
+                    set("phone", e.target.value.replace(/\D/g, "").slice(0, 10))
                   }
                 />
               </div>
@@ -10569,8 +10628,8 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
               <div>
                 <h3>Your account</h3>
                 <p className="small muted">
-                  Managed by you. The hospital admin handles the shared
-                  hospital listing.
+                  Managed by you. The hospital admin handles the shared hospital
+                  listing.
                 </p>
               </div>
             </div>
@@ -10584,55 +10643,55 @@ function SettingsTab({ clinic, notify, onSaved, onExpired, go }) {
             </div>
           </div>
         ) : (
-        <div className="panel">
-          <div className="panel-head">
-            <div>
-              <h3>Your public booking link</h3>
-              <p className="small muted">
-                Share this with patients, print it, or add it to your board.
-              </p>
+          <div className="panel">
+            <div className="panel-head">
+              <div>
+                <h3>Your public booking link</h3>
+                <p className="small muted">
+                  Share this with patients, print it, or add it to your board.
+                </p>
+              </div>
+            </div>
+            <div className="panel-body stack">
+              <div className="copy-row">
+                <Icon name="right" size={15} />
+                <span className="mono">{bookingLink}</span>
+              </div>
+              <div className="row">
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => {
+                    if (navigator.clipboard) {
+                      navigator.clipboard.writeText(bookingLink);
+                      notify("Booking link copied.", "ok");
+                    } else {
+                      notify("Copy is not available in this browser.", "err");
+                    }
+                  }}
+                >
+                  <Icon name="list" size={15} /> Copy link
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => go("/clinic/" + clinic.clinicId)}
+                >
+                  <Icon name="right" size={15} /> Open booking page
+                </button>
+              </div>
+              <dl className="kv">
+                <dt>Clinic ID</dt>
+                <dd className="mono">{clinic.clinicId}</dd>
+                <dt>Admin user ID</dt>
+                <dd className="mono">{clinic.adminUserId}</dd>
+                <dt>Registered</dt>
+                <dd>
+                  {clinic.createdAt
+                    ? fmtLongDate(String(clinic.createdAt).slice(0, 10))
+                    : "-"}
+                </dd>
+              </dl>
             </div>
           </div>
-          <div className="panel-body stack">
-            <div className="copy-row">
-              <Icon name="right" size={15} />
-              <span className="mono">{bookingLink}</span>
-            </div>
-            <div className="row">
-              <button
-                className="btn btn-outline btn-sm"
-                onClick={() => {
-                  if (navigator.clipboard) {
-                    navigator.clipboard.writeText(bookingLink);
-                    notify("Booking link copied.", "ok");
-                  } else {
-                    notify("Copy is not available in this browser.", "err");
-                  }
-                }}
-              >
-                <Icon name="list" size={15} /> Copy link
-              </button>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => go("/clinic/" + clinic.clinicId)}
-              >
-                <Icon name="right" size={15} /> Open booking page
-              </button>
-            </div>
-            <dl className="kv">
-              <dt>Clinic ID</dt>
-              <dd className="mono">{clinic.clinicId}</dd>
-              <dt>Admin user ID</dt>
-              <dd className="mono">{clinic.adminUserId}</dd>
-              <dt>Registered</dt>
-              <dd>
-                {clinic.createdAt
-                  ? fmtLongDate(String(clinic.createdAt).slice(0, 10))
-                  : "-"}
-              </dd>
-            </dl>
-          </div>
-        </div>
         )}
 
         {!isDoctor ? (
@@ -11354,7 +11413,9 @@ function DoctorsTab({ notify, onExpired }) {
                         onChange={(e) =>
                           setEditForm((c) => ({
                             ...c,
-                            mobile: e.target.value.replace(/\D/g, "").slice(0, 10),
+                            mobile: e.target.value
+                              .replace(/\D/g, "")
+                              .slice(0, 10),
                           }))
                         }
                       />
@@ -11924,8 +11985,8 @@ function ListingFormModal({ clinic, close, notify, onSaved, onExpired }) {
         ) : (
           <div className="field">
             <Alert kind="info">
-              Doctors are added afterwards from that hospital's own Doctors
-              tab, not here.
+              Doctors are added afterwards from that hospital's own Doctors tab,
+              not here.
             </Alert>
           </div>
         )}
